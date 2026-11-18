@@ -22,7 +22,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     
-    <link rel="stylesheet" href="css/styles.css?v=3">
+    <link rel="stylesheet" href="css/styles.css?v=4">
 </head>
 <body class="min-h-screen flex flex-col items-center justify-start sm:pb-10 selection:bg-emerald-500 selection:text-zinc-950">
 
@@ -511,7 +511,7 @@
                 </div>
 
                 <!-- Версия сайта (меняй при каждом обновлении файла) -->
-                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.0 · 19.11.2026 · сборка 3</p>
+                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.0 · 19.11.2026 · сборка 4</p>
             </section>
 
         </main>
@@ -621,6 +621,12 @@
 
                 <!-- Тело модального окна -->
                 <div class="p-5 overflow-y-auto space-y-4 flex-1">
+
+                    <!-- Избранные блюда -->
+                    <div id="favorites-block" class="hidden">
+                        <label class="block text-xs font-medium text-zinc-300 mb-1.5">Избранное (нажми, чтобы добавить без ИИ):</label>
+                        <div id="favorites-list" class="flex gap-2 overflow-x-auto no-scrollbar"></div>
+                    </div>
                     
                     <!-- Переключатель режима Фото / Текст -->
                     <div class="grid grid-cols-2 bg-dark-800 p-1 rounded-xl border border-zinc-800">
@@ -708,6 +714,11 @@
                             </div>
                         </div>
 
+                        <button onclick="addCurrentToFavorites()" class="w-full bg-dark-800 hover:bg-zinc-700 text-white font-semibold py-3 rounded-2xl transition text-xs flex items-center justify-center gap-2">
+                            <i data-lucide="star" class="w-4 h-4 text-amber-400"></i>
+                            <span>Сохранить в избранное</span>
+                        </button>
+
                         <button onclick="saveMealToLog()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition">
                             <i data-lucide="check" class="w-5 h-5"></i>
                             <span>Добавить в дневник за день</span>
@@ -749,6 +760,6 @@
 
     </div>
 
-    <script src="js/app.js?v=3"></script>
+    <script src="js/app.js?v=4"></script>
 </body>
 </html>

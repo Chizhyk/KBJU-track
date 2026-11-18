@@ -262,6 +262,7 @@
                 if (savedTargets) state.targets = JSON.parse(savedTargets);
                 if (savedProfile) state.profile = { ...state.profile, ...JSON.parse(savedProfile) };
                 if (savedLogs) state.logs = JSON.parse(savedLogs);
+                loadFavorites();
             } catch (e) {
                 console.error("Ошибка загрузки из localStorage:", e);
             }
@@ -359,10 +360,15 @@
                         const keyInput = document.getElementById('setting-api-key');
                         if (keyInput) keyInput.value = cloudKey;
                     }
+                    const cloudHasFavs = Array.isArray(data.data.favorites);
+                    if (cloudHasFavs) {
+                        favorites = data.data.favorites;
+                        try { localStorage.setItem('ai_kbju_favorites', JSON.stringify(favorites)); } catch (e) {}
+                    }
                     persistState(); updateDashboardUI();
                     isApplyingCloudData = false;
                     cloudReady = true;
-                    if (!cloudKey && (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()) {
+                    if ((!cloudKey && (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()) || (!cloudHasFavs && favorites.length)) {
                         await saveCloudState(); // в облаке ключа нет, а на устройстве есть: отправляем в аккаунт
                     }
                     updateCloudAuthUI('Облачные данные загружены.');
@@ -392,7 +398,8 @@
                     targets: state.targets,
                     profile: state.profile,
                     logs: state.logs,
-                    geminiKey: (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()
+                    geminiKey: (localStorage.getItem('ai_kbju_custom_api_key') || '').trim(),
+                    favorites: favorites
                 },
                 updated_at: new Date().toISOString()
             };
@@ -641,9 +648,85 @@
         // ==========================================
         // 5. МОДАЛЬНОЕ ОКНО: ФОТО И СЖАТИЕ ИЗОБРАЖЕНИЯ
         // ==========================================
+        // ==========================================
+        // ИЗБРАННЫЕ БЛЮДА (без запросов к ИИ)
+        // ==========================================
+        let favorites = [];
+
+        function loadFavorites() {
+            try {
+                const raw = JSON.parse(localStorage.getItem('ai_kbju_favorites') || '[]');
+                favorites = Array.isArray(raw) ? raw : [];
+            } catch (e) { favorites = []; }
+        }
+
+        function saveFavorites() {
+            try { localStorage.setItem('ai_kbju_favorites', JSON.stringify(favorites)); } catch (e) { console.error(e); }
+            scheduleCloudSync();
+            renderFavorites();
+        }
+
+        function renderFavorites() {
+            const block = document.getElementById('favorites-block');
+            const list = document.getElementById('favorites-list');
+            if (!block || !list) return;
+            if (favorites.length === 0) { block.classList.add('hidden'); list.innerHTML = ''; return; }
+            block.classList.remove('hidden');
+            list.innerHTML = favorites.map(fav => `
+                <div class="flex-shrink-0 flex items-center bg-dark-800 border border-zinc-700 rounded-xl">
+                    <button type="button" onclick="useFavorite('${fav.id}')" class="px-3 py-2 text-left">
+                        <span class="block text-xs font-semibold text-white truncate">${escapeHtml(fav.name)}</span>
+                        <span class="block text-[10px] text-zinc-400">${Math.round(fav.totals.kcal)} ккал</span>
+                    </button>
+                    <button type="button" onclick="removeFavorite('${fav.id}')" class="px-2 text-zinc-500 hover:text-red-400" title="Удалить из избранного">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        function addCurrentToFavorites() {
+            if (currentDetectedItems.length === 0) { showToast("Сначала добавь хотя бы один продукт", "alert-circle"); return; }
+            const defaultName = currentDetectedItems.map(it => it.name).join(', ').slice(0, 40);
+            const input = window.prompt('Название для избранного:', defaultName);
+            if (input === null) return;
+            const name = input.trim().slice(0, 40);
+            if (!name) return;
+            let kcal = 0, p = 0, f = 0, c = 0;
+            currentDetectedItems.forEach(it => { kcal += Number(it.kcal) || 0; p += Number(it.p) || 0; f += Number(it.f) || 0; c += Number(it.c) || 0; });
+            const entry = {
+                id: 'fav_' + Date.now(),
+                name,
+                items: currentDetectedItems.map(it => ({ ...it })),
+                totals: { kcal: Math.round(kcal), p: Math.round(p * 10) / 10, f: Math.round(f * 10) / 10, c: Math.round(c * 10) / 10 }
+            };
+            favorites = favorites.filter(x => x.name.toLowerCase() !== name.toLowerCase());
+            favorites.unshift(entry);
+            favorites = favorites.slice(0, 30);
+            saveFavorites();
+            showToast("Добавлено в избранное", "star");
+        }
+
+        function useFavorite(id) {
+            const fav = favorites.find(x => x.id === id);
+            if (!fav) return;
+            currentDetectedItems = fav.items.map(it => ({ ...it }));
+            document.getElementById('recognition-results').classList.remove('hidden');
+            renderDetectedItemsEditor();
+        }
+
+        function removeFavorite(id) {
+            const fav = favorites.find(x => x.id === id);
+            if (!fav || !window.confirm('Удалить «' + fav.name + '» из избранного?')) return;
+            favorites = favorites.filter(x => x.id !== id);
+            saveFavorites();
+        }
+
         function openAddModal(mode = 'photo') {
             resetModalState();
             setModalMode(mode);
+            renderFavorites();
             document.getElementById('add-modal').classList.remove('hidden');
             lucide.createIcons();
         }
