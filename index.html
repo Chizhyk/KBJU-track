@@ -20,6 +20,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Supabase: Google login and cloud database -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <script>
         tailwind.config = {
@@ -102,7 +104,7 @@
                     <button id="prev-day-btn" class="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700/50 transition" title="Предыдущий день">
                         <i data-lucide="chevron-left" class="w-4 h-4"></i>
                     </button>
-                    <button id="today-btn" class="px-2 py-1 text-xs font-semibold text-zinc-200 hover:text-emerald-400 transition whitespace-nowrap">
+                    <button id="today-btn" onclick="openCalendar()" class="px-2 py-1 text-xs font-semibold text-zinc-200 hover:text-emerald-400 transition whitespace-nowrap">
                         Сегодня
                     </button>
                     <button id="next-day-btn" class="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700/50 transition" title="Следующий день">
@@ -467,6 +469,47 @@
                     </button>
                 </div>
 
+                <!-- Настройка иконки приложения -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-violet-500/15 border border-violet-500/30 flex items-center justify-center text-violet-400">
+                            <i data-lucide="app-window" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Иконка приложения</h2>
+                            <p class="text-xs text-zinc-400">Выбери изображение для ярлыка на телефоне</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <img id="app-icon-preview" alt="Предпросмотр иконки" class="w-16 h-16 rounded-2xl object-cover border border-zinc-700 bg-dark-800">
+                        <div class="flex-1 space-y-2">
+                            <input id="app-icon-input" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange="handleAppIconSelect(event)">
+                            <button type="button" onclick="document.getElementById('app-icon-input').click()" class="w-full bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 border border-violet-500/30 font-semibold py-2.5 rounded-xl text-xs transition">Выбрать свою иконку</button>
+                            <button type="button" onclick="resetAppIcon()" class="w-full text-zinc-400 hover:text-white text-xs py-1">Вернуть стандартную</button>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-zinc-500 leading-relaxed">Лучше использовать квадратное изображение PNG. После изменения иконки уже установленного приложения может понадобиться удалить старый ярлык и установить приложение заново.</p>
+                </div>
+
+                <!-- Облачная синхронизация через Google -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                            <i data-lucide="cloud" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Облачное сохранение</h2>
+                            <p class="text-xs text-zinc-400">Синхронизация дневника через Google</p>
+                        </div>
+                    </div>
+                    <p id="cloud-auth-status" class="text-xs text-zinc-400">Для подключения облака сначала нужно настроить Supabase (инструкция будет ниже).</p>
+                    <button id="google-signin-btn" type="button" onclick="signInWithGoogle()" class="w-full bg-white hover:bg-zinc-200 text-zinc-900 font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 transition">
+                        <i data-lucide="log-in" class="w-4 h-4"></i> Войти через Google
+                    </button>
+                    <button id="google-signout-btn" type="button" onclick="signOutFromCloud()" class="hidden w-full bg-dark-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-semibold py-2.5 rounded-xl text-xs">Выйти из аккаунта</button>
+                    <p class="text-[11px] text-zinc-500 leading-relaxed">Пока Supabase не настроен, данные продолжают сохраняться в этом браузере. Ключ Gemini не отправляется в облако.</p>
+                </div>
+
                 <!-- Блок 3: API Ключ Gemini и Установка PWA на телефон -->
                 <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-4">
                     <div class="flex items-center gap-3">
@@ -723,6 +766,29 @@
             </div>
         </div>
 
+        <!-- Компактный календарь дневника -->
+        <div id="calendar-modal" class="hidden fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this) closeCalendar()">
+            <div class="w-full max-w-sm bg-dark-900 border border-zinc-700 rounded-3xl p-4 shadow-2xl space-y-4">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-base font-bold text-white">История питания</h2>
+                    <button type="button" onclick="closeCalendar()" class="p-2 text-zinc-400 hover:text-white rounded-xl"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+                <div class="flex items-center justify-between">
+                    <button type="button" onclick="changeCalendarMonth(-1)" class="p-2 rounded-xl bg-dark-800 text-zinc-300 hover:text-white"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+                    <div id="calendar-month-label" class="text-sm font-bold text-white"></div>
+                    <button type="button" onclick="changeCalendarMonth(1)" class="p-2 rounded-xl bg-dark-800 text-zinc-300 hover:text-white"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+                </div>
+                <div class="grid grid-cols-7 gap-1 text-center" id="calendar-grid"></div>
+                <div class="flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-zinc-400">
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Есть записи</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-zinc-600"></span> Нет записей</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Выбранный день</span>
+                </div>
+                <div id="calendar-selected-info" class="bg-dark-800 rounded-2xl p-3 text-xs text-zinc-300"></div>
+                <button type="button" onclick="goToCalendarToday()" class="w-full py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">Перейти к сегодняшнему дню</button>
+            </div>
+        </div>
+
         <!-- Всплывающее уведомление (Toast) -->
         <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 hidden bg-zinc-800 border border-zinc-700 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 transition-all">
             <i id="toast-icon" data-lucide="info" class="w-4 h-4 text-emerald-400"></i>
@@ -737,6 +803,14 @@
         // ==========================================
         const defaultApiKey = ""; // Ключ подставляется средой выполнения автоматически или берётся из настроек профиля
         const GEMINI_MODEL = "gemini-2.5-flash";
+        // Вставь сюда URL и anon/public key своего проекта Supabase (не service_role key!).
+        const SUPABASE_URL = "https://yyehwrqhecqejfdgafy.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_SwA5oaF3hSMHsF3xr6AwXA_VZNbG9Up";
+        let supabaseClient = null;
+        let cloudUser = null;
+        let cloudSyncTimer = null;
+        let isApplyingCloudData = false;
+        let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
         let deferredInstallPrompt = null;
 
         function getActiveApiKey() {
@@ -774,34 +848,8 @@
                 ctx.font = '800 64px Inter, sans-serif';
                 ctx.fillText('КБЖУ', 256, 395);
 
-                const iconDataUrl = iconCanvas.toDataURL('image/png');
-                const appleIconEl = document.getElementById('apple-touch-icon');
-                if (appleIconEl) appleIconEl.href = iconDataUrl;
-
-                // Динамический manifest.json через Blob URL
-                const manifestObj = {
-                    name: "AI КБЖУ Трекер",
-                    short_name: "AI КБЖУ",
-                    description: "Умный дневник питания с распознаванием еды по фото",
-                    start_url: window.location.href.split('#')[0],
-                    display: "standalone",
-                    orientation: "portrait",
-                    background_color: "#09090b",
-                    theme_color: "#09090b",
-                    icons: [
-                        {
-                            src: iconDataUrl,
-                            sizes: "512x512",
-                            type: "image/png",
-                            purpose: "any maskable"
-                        }
-                    ]
-                };
-
-                const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
-                const manifestUrl = URL.createObjectURL(manifestBlob);
-                const manifestEl = document.getElementById('pwa-manifest');
-                if (manifestEl) manifestEl.href = manifestUrl;
+                const iconDataUrl = localStorage.getItem('ai_kbju_app_icon') || iconCanvas.toDataURL('image/png');
+                applyPwaIcon(iconDataUrl);
 
                 // Регистрация лёгкого Service Worker для соответствия критериям PWA (если поддерживается протоколом)
                 if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost')) {
@@ -892,6 +940,112 @@
         // ==========================================
         // 2. ИНИЦИАЛИЗАЦИЯ И ХРАНИЛИЩЕ (LOCALSTORAGE)
         // ==========================================
+        function applyPwaIcon(iconDataUrl) {
+            const appleIconEl = document.getElementById('apple-touch-icon');
+            if (appleIconEl) appleIconEl.href = iconDataUrl;
+            const manifestObj = {
+                name: "AI КБЖУ Трекер", short_name: "AI КБЖУ",
+                description: "Умный дневник питания с распознаванием еды по фото",
+                start_url: window.location.href.split('#')[0], display: "standalone",
+                orientation: "portrait", background_color: "#09090b", theme_color: "#09090b",
+                icons: [{ src: iconDataUrl, sizes: "512x512", type: "image/png", purpose: "any maskable" }]
+            };
+            const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
+            const manifestUrl = URL.createObjectURL(manifestBlob);
+            const manifestEl = document.getElementById('pwa-manifest');
+            if (manifestEl) manifestEl.href = manifestUrl;
+            const preview = document.getElementById('app-icon-preview');
+            if (preview) preview.src = iconDataUrl;
+        }
+
+        function handleAppIconSelect(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            if (!file.type.startsWith('image/')) { showToast('Выбери файл изображения', 'alert-circle'); return; }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 512; canvas.height = 512;
+                    const ctx = canvas.getContext('2d');
+                    const side = Math.min(img.width, img.height);
+                    const sx = (img.width - side) / 2, sy = (img.height - side) / 2;
+                    ctx.drawImage(img, sx, sy, side, side, 0, 0, 512, 512);
+                    const data = canvas.toDataURL('image/png');
+                    try {
+                        localStorage.setItem('ai_kbju_app_icon', data);
+                        applyPwaIcon(data);
+                        showToast('Иконка приложения обновлена', 'check-circle-2');
+                    } catch (err) { showToast('Не удалось сохранить иконку: файл слишком большой', 'alert-circle'); }
+                };
+                img.onerror = () => showToast('Не удалось открыть изображение', 'alert-circle');
+                img.src = reader.result;
+            };
+            reader.readAsDataURL(file);
+            event.target.value = '';
+        }
+
+        function resetAppIcon() {
+            localStorage.removeItem('ai_kbju_app_icon');
+            const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createLinearGradient(0, 0, 512, 512);
+            grad.addColorStop(0, '#10b981'); grad.addColorStop(1, '#84cc16');
+            ctx.fillStyle = grad; ctx.beginPath(); ctx.roundRect(0, 0, 512, 512, 112); ctx.fill();
+            ctx.fillStyle = '#09090b'; ctx.font = 'bold 210px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('🔥', 256, 225); ctx.font = '800 64px Inter, sans-serif'; ctx.fillText('КБЖУ', 256, 395);
+            applyPwaIcon(canvas.toDataURL('image/png'));
+            showToast('Стандартная иконка восстановлена', 'check-circle-2');
+        }
+
+        function openCalendar() {
+            const [y, m] = state.selectedDate.split('-').map(Number);
+            calendarMonth = new Date(y, m - 1, 1);
+            renderCalendar();
+            document.getElementById('calendar-modal').classList.remove('hidden');
+            lucide.createIcons();
+        }
+        function closeCalendar() { document.getElementById('calendar-modal').classList.add('hidden'); }
+        function changeCalendarMonth(delta) {
+            calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + delta, 1);
+            renderCalendar();
+        }
+        function goToCalendarToday() {
+            state.selectedDate = getTodayDateString();
+            closeCalendar(); updateDashboardUI();
+        }
+        function renderCalendar() {
+            const year = calendarMonth.getFullYear(), month = calendarMonth.getMonth();
+            const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+            document.getElementById('calendar-month-label').textContent = `${monthNames[month]} ${year}`;
+            const grid = document.getElementById('calendar-grid');
+            const weekdays = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+            let html = weekdays.map(d => `<div class="text-[10px] font-semibold text-zinc-500 py-1">${d}</div>`).join('');
+            const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7;
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            for (let i=0; i<firstOffset; i++) html += '<div class="h-10"></div>';
+            const today = getTodayDateString();
+            for (let day=1; day<=daysInMonth; day++) {
+                const date = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+                const hasEntries = Array.isArray(state.logs[date]) && state.logs[date].length > 0;
+                const isSelected = date === state.selectedDate;
+                const isFuture = date > today;
+                const color = isSelected ? 'bg-sky-500 text-white border-sky-400' : hasEntries ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-dark-800 text-zinc-300 border-zinc-800';
+                const marker = isFuture ? '' : `<span class="w-1.5 h-1.5 rounded-full ${hasEntries ? 'bg-emerald-400' : 'bg-zinc-600'}"></span>`;
+                html += `<button type="button" onclick="selectCalendarDate('${date}')" class="h-10 rounded-xl border ${color} flex flex-col items-center justify-center gap-0.5 text-xs font-semibold hover:border-sky-400 transition">${day}${marker}</button>`;
+            }
+            grid.innerHTML = html;
+            const selectedMeals = state.logs[state.selectedDate] || [];
+            const status = selectedMeals.length ? `Записано приёмов пищи: ${selectedMeals.length}` : (state.selectedDate <= today ? 'В этот день записей пока нет' : 'Это будущая дата');
+            document.getElementById('calendar-selected-info').textContent = `${formatHumanDate(state.selectedDate)} · ${state.selectedDate} — ${status}`;
+            lucide.createIcons();
+        }
+        function selectCalendarDate(date) {
+            state.selectedDate = date;
+            closeCalendar(); updateDashboardUI();
+        }
+
         function getTodayDateString() {
             const now = new Date();
             const offset = now.getTimezoneOffset() * 60000;
@@ -916,6 +1070,7 @@
                 localStorage.setItem('ai_kbju_targets', JSON.stringify(state.targets));
                 localStorage.setItem('ai_kbju_profile', JSON.stringify(state.profile));
                 localStorage.setItem('ai_kbju_logs', JSON.stringify(state.logs));
+                scheduleCloudSync();
             } catch (e) {
                 // Если хранилище переполнено из-за картинок, сохраняем без миниатюр старых записей
                 console.warn("Переполнение localStorage, очищаем старые превью...");
@@ -926,6 +1081,7 @@
                 });
                 try {
                     localStorage.setItem('ai_kbju_logs', JSON.stringify(state.logs));
+                    scheduleCloudSync();
                 } catch (err) {
                     showToast("Память браузера заполнена, удалите старые записи", "alert-circle");
                 }
@@ -935,6 +1091,102 @@
         // ==========================================
         // 3. НАВИГАЦИЯ И ПЕРЕКЛЮЧЕНИЕ ДАТ
         // ==========================================
+        function updateCloudAuthUI(message) {
+            const status = document.getElementById('cloud-auth-status');
+            const signIn = document.getElementById('google-signin-btn');
+            const signOut = document.getElementById('google-signout-btn');
+            if (!status || !signIn || !signOut) return;
+            if (message) status.textContent = message;
+            if (cloudUser) {
+                status.textContent = `Подключено: ${cloudUser.email || 'Google аккаунт'}. Данные синхронизируются.`;
+                signIn.classList.add('hidden'); signOut.classList.remove('hidden');
+            } else {
+                signIn.classList.remove('hidden'); signOut.classList.add('hidden');
+            }
+        }
+
+        async function initCloudAuth() {
+            if (!window.supabase || SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
+                updateCloudAuthUI('Облако ещё не настроено. Добавь URL и anon key проекта Supabase в начале index.html.');
+                return;
+            }
+            try {
+                supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                const { data: { session } } = await supabaseClient.auth.getSession();
+                if (session?.user) { cloudUser = session.user; updateCloudAuthUI(); await loadCloudState(); }
+                supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+                    cloudUser = session?.user || null;
+                    updateCloudAuthUI();
+                    if (cloudUser) await loadCloudState();
+                });
+            } catch (err) {
+                console.error('Supabase init error:', err);
+                updateCloudAuthUI('Не удалось подключить облако. Проверь настройки Supabase.');
+            }
+        }
+
+        async function signInWithGoogle() {
+            if (!supabaseClient) { showToast('Сначала настрой Supabase в коде', 'alert-circle'); return; }
+            const { error } = await supabaseClient.auth.signInWithOAuth({
+                provider: 'google',
+                options: { redirectTo: window.location.origin + window.location.pathname }
+            });
+            if (error) showToast(`Ошибка входа: ${error.message}`, 'alert-circle');
+        }
+
+        async function signOutFromCloud() {
+            if (!supabaseClient) return;
+            const { error } = await supabaseClient.auth.signOut();
+            if (error) showToast(`Ошибка выхода: ${error.message}`, 'alert-circle');
+            else { cloudUser = null; updateCloudAuthUI('Вышел из облачного аккаунта. Локальные данные остались на устройстве.'); }
+        }
+
+        async function loadCloudState() {
+            if (!supabaseClient || !cloudUser) return;
+            try {
+                const { data, error } = await supabaseClient.from('kbju_user_data').select('data').eq('user_id', cloudUser.id).maybeSingle();
+                if (error) throw error;
+                if (data?.data) {
+                    isApplyingCloudData = true;
+                    state.targets = data.data.targets || state.targets;
+                    state.profile = { ...state.profile, ...(data.data.profile || {}) };
+                    state.logs = data.data.logs || state.logs;
+                    persistState(); updateDashboardUI();
+                    isApplyingCloudData = false;
+                    updateCloudAuthUI('Облачные данные загружены.');
+                } else {
+                    await saveCloudState();
+                }
+            } catch (err) {
+                isApplyingCloudData = false;
+                console.error('Cloud load error:', err);
+                updateCloudAuthUI('Не удалось загрузить данные. Проверь SQL-политику таблицы Supabase.');
+            }
+        }
+
+        function scheduleCloudSync() {
+            if (!supabaseClient || !cloudUser || isApplyingCloudData) return;
+            clearTimeout(cloudSyncTimer);
+            cloudSyncTimer = setTimeout(saveCloudState, 900);
+        }
+
+        async function saveCloudState() {
+            if (!supabaseClient || !cloudUser || isApplyingCloudData) return;
+            const payload = {
+                user_id: cloudUser.id,
+                data: { targets: state.targets, profile: state.profile, logs: state.logs },
+                updated_at: new Date().toISOString()
+            };
+            try {
+                const { error } = await supabaseClient.from('kbju_user_data').upsert(payload, { onConflict: 'user_id' });
+                if (error) throw error;
+                updateCloudAuthUI('Все изменения сохранены в облаке.');
+            } catch (err) {
+                console.error('Cloud save error:', err);
+                updateCloudAuthUI('Ошибка облачного сохранения. Локальная копия сохранена на устройстве.');
+            }
+        }
+
         function switchTab(tabName) {
             ['dashboard', 'coach', 'settings'].forEach(t => {
                 document.getElementById(`tab-${t}`).classList.add('hidden');
@@ -1851,14 +2103,10 @@ ${state.profile.notes ? `- Дополнительные пожелания: ${st
         window.onload = function() {
             initPWA();
             loadState();
+            initCloudAuth();
 
             document.getElementById('prev-day-btn').addEventListener('click', () => changeDate(-1));
             document.getElementById('next-day-btn').addEventListener('click', () => changeDate(1));
-            document.getElementById('today-btn').addEventListener('click', () => {
-                state.selectedDate = getTodayDateString();
-                updateDashboardUI();
-            });
-
             updateDashboardUI();
             lucide.createIcons();
         };
