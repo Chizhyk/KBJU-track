@@ -1,254 +1,765 @@
 <!DOCTYPE html>
-<html lang="ru" class="h-full">
-<head>
+<html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI КБЖУ Трекер</title>
-    <!-- Подключаем Tailwind напрямую через CDN, чтобы стили гарантированно работали везде -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Библиотека для сканирования штрихкодов -->
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-    <!-- Библиотека для графиков -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>AI КБЖУ Трекер — Умный дневник питания</title>
+    <!-- PWA Meta Tags для Android и iOS -->
+    <meta name="theme-color" content="#09090b">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AI КБЖУ">
+    <link id="pwa-manifest" rel="manifest" href="">
+    <link id="apple-touch-icon" rel="apple-touch-icon" href="">
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Supabase: Google login and cloud database -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    
+    <link rel="stylesheet" href="css/styles.css?v=4">
 </head>
-</head>
-<body class="bg-slate-950 text-slate-100 h-full flex flex-col justify-between font-sans antialiased selection:bg-blue-500 selection:text-white">
+<body class="min-h-screen flex flex-col items-center justify-start sm:pb-10 selection:bg-emerald-500 selection:text-zinc-950">
 
-    <!-- Верхняя шапка -->
-    <header class="bg-slate-900 border-b border-slate-800 px-4 py-3 sticky top-0 z-40 flex justify-between items-center">
-        <div class="flex items-center space-x-2">
-            <span class="text-2xl">🥗</span>
-            <h1 class="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">КБЖУ Трекер AI</h1>
-        </div>
-        <div class="flex items-center space-x-2">
-            <button onclick="openBarcodeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-1 border border-slate-700 transition">
-                <span>📷 Штрихкод</span>
-            </button>
-        </div>
-    </header>
+    <!-- Главный контейнер приложения -->
+    <div class="w-full max-w-lg min-h-screen flex flex-col bg-dark-950 sm:border-x sm:border-zinc-800/80 shadow-2xl relative">
 
-    <!-- Основной контейнер страниц -->
-    <main class="flex-1 overflow-y-auto pb-24 p-4 max-w-md mx-auto w-full">
-        
-        <!-- ВКЛАДКА 1: ДНЕВНИК -->
-        <section id="tab-diary" class="space-y-4">
-            <!-- Блок прогресса за день -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg relative overflow-hidden">
-                <div class="flex justify-between items-start mb-3">
-                    <div>
-                        <span class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Сегодня съедено</span>
-                        <div class="text-3xl font-black text-white mt-0.5"><span id="total-kcal">0</span> <span class="text-sm font-normal text-slate-400">/ <span id="target-kcal">3400</span> ккал</span></div>
-                    </div>
-                    <button onclick="switchTab('profile')" class="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-xs px-3 py-1.5 rounded-xl border border-blue-500/30 transition">Норма: <span id="target-kcal-badge">3400</span></button>
+        <!-- Шапка приложения -->
+        <header class="sticky top-0 z-30 bg-dark-950/90 backdrop-blur-md border-b border-zinc-800/80 px-3.5 py-3 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 to-lime-500 flex items-center justify-center text-zinc-950 font-extrabold shadow-lg shadow-emerald-500/20 flex-shrink-0">
+                    <i data-lucide="flame" class="w-5 h-5 fill-current"></i>
                 </div>
-                <!-- Полоска прогресса -->
-                <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden p-0.5">
-                    <div id="kcal-progress-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
-                </div>
-                <!-- БЖУ мини-карточки -->
-                <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-800 text-center">
-                    <div class="bg-slate-950/50 p-2 rounded-xl border border-slate-800/60">
-                        <div class="text-[10px] text-slate-400 uppercase font-semibold">Белки</div>
-                        <div class="text-sm font-bold text-blue-400"><span id="total-protein">0</span>г</div>
-                    </div>
-                    <div class="bg-slate-950/50 p-2 rounded-xl border border-slate-800/60">
-                        <div class="text-[10px] text-slate-400 uppercase font-semibold">Жиры</div>
-                        <div class="text-sm font-bold text-amber-400"><span id="total-fat">0</span>г</div>
-                    </div>
-                    <div class="bg-slate-950/50 p-2 rounded-xl border border-slate-800/60">
-                        <div class="text-[10px] text-slate-400 uppercase font-semibold">Углеводы</div>
-                        <div class="text-sm font-bold text-emerald-400"><span id="total-carbs">0</span>г</div>
-                    </div>
+                <div class="truncate">
+                    <h1 class="text-sm sm:text-base font-bold tracking-tight text-white leading-none truncate">AI КБЖУ</h1>
+                    <span class="text-[10px] sm:text-[11px] text-emerald-400 font-medium block truncate">Умный трекер</span>
                 </div>
             </div>
 
-            <!-- График калорий за неделю -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
-                <h3 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-3">Динамика за 7 дней</h3>
-                <canvas id="caloriesChart" height="100"></canvas>
-            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                <!-- Кнопка установки приложения на телефон -->
+                <button id="header-install-btn" onclick="triggerPwaInstall()" class="flex items-center gap-1 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition active:scale-95" title="Установить приложение на телефон">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                    <span class="hidden xs:inline">Скачать</span>
+                </button>
 
-            <!-- Список приемов пищи -->
-            <div class="flex justify-between items-center">
-                <h2 class="text-base font-bold text-slate-200">Приемы пищи</h2>
-                <button onclick="switchTab('ai')" class="text-xs text-blue-400 hover:text-blue-300 font-medium">+ Добавить еду</button>
-            </div>
-            <div id="meals-list" class="space-y-3">
-                <!-- Сюда динамически добавляются приемы пищи -->
-            </div>
-        </section>
-
-        <!-- ВКЛАДКА 2: ФОТО AI & СКАНЕР -->
-        <section id="tab-ai" class="space-y-4 hidden">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg text-center space-y-4">
-                <div class="w-16 h-16 bg-blue-600/20 text-blue-400 rounded-2xl mx-auto flex items-center justify-center text-3xl border border-blue-500/30">📸</div>
-                <div>
-                    <h2 class="text-lg font-bold">Распознавание еды</h2>
-                    <p class="text-xs text-slate-400 mt-1">Сфоткай тарелку или загрузи картинку, ИИ сам разложит всё на граммы и КБЖУ</p>
-                </div>
-
-                <div class="space-y-2">
-                    <input type="file" id="food-photo-input" accept="image/*" capture="environment" class="hidden" onchange="handleImageUpload(event)">
-                    <button onclick="document.getElementById('food-photo-input').click()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 px-4 rounded-xl shadow-lg transition flex items-center justify-center space-x-2">
-                        <span>📷 Сделать фото еды</span>
+                <!-- Переключатель дат -->
+                <div class="flex items-center bg-dark-800 rounded-xl p-0.5 sm:p-1 border border-zinc-800">
+                    <button id="prev-day-btn" class="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700/50 transition" title="Предыдущий день">
+                        <i data-lucide="chevron-left" class="w-4 h-4"></i>
                     </button>
-                    <button onclick="openBarcodeModal()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2.5 px-4 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-2">
-                        <span>📦 Сканировать штрихкод</span>
+                    <button id="today-btn" onclick="openCalendar()" class="px-2 py-1 text-xs font-semibold text-zinc-200 hover:text-emerald-400 transition whitespace-nowrap">
+                        Сегодня
+                    </button>
+                    <button id="next-day-btn" class="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700/50 transition" title="Следующий день">
+                        <i data-lucide="chevron-right" class="w-4 h-4"></i>
                     </button>
                 </div>
-
-                <!-- Поле для текстовых уточнений -->
-                <div class="pt-2 text-left">
-                    <label class="text-xs font-semibold text-slate-400 block mb-1">Уточнения для ИИ (необязательно):</label>
-                    <input type="text" id="ai-prompt-notes" placeholder="Например: в твороге ещё ложка мёда и сметана" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500">
-                </div>
             </div>
+        </header>
 
-            <!-- Блок превью выбранного фото -->
-            <div id="ai-preview-container" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <img id="ai-selected-image" class="w-full h-48 object-cover rounded-xl border border-slate-800">
-                <button onclick="analyzeFoodPhoto()" id="analyze-btn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-xl transition shadow-lg">Рассчитать КБЖУ через ИИ</button>
-            </div>
-        </section>
+        <!-- Основной контент (Вкладки) -->
+        <main class="flex-1 px-4 pt-4 space-y-5">
 
-        <!-- ВКЛАДКА 3: AI ТРЕНЕР -->
-        <section id="tab-trainer" class="space-y-4 hidden">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
-                <div class="flex items-center space-x-3">
-                    <div class="w-10 h-10 bg-indigo-600/20 text-indigo-400 rounded-xl flex items-center justify-center text-xl border border-indigo-500/30">🤖</div>
-                    <div>
-                        <h2 class="text-base font-bold">AI Нутрициолог</h2>
-                        <p class="text-xs text-slate-400">Анализ твоего рациона и персональные советы</p>
-                    </div>
-                </div>
-                <button onclick="getAiTrainerAdvice()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 rounded-xl transition shadow-lg">Получить разбор рациона</button>
-                <div id="ai-trainer-response" class="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 text-sm text-slate-300 leading-relaxed hidden">
-                    <!-- Ответ тренера -->
-                </div>
-            </div>
-        </section>
-
-        <!-- ВКЛАДКА 4: ПРОФИЛЬ -->
-        <section id="tab-profile" class="space-y-4 hidden">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
-                <h2 class="text-base font-bold">Твой профиль и цели</h2>
+            <!-- ВКЛАДКА 1: ДНЕВНИК И ДАШБОРД -->
+            <section id="tab-dashboard" class="space-y-5">
                 
-                <div class="space-y-3 text-sm">
-                    <div>
-                        <label class="text-xs text-slate-400 block mb-1">Gemini API Ключ (из AI Studio)</label>
-                        <input type="password" id="profile-apikey" placeholder="AIza..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                    </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="text-xs text-slate-400 block mb-1">Вес (кг)</label>
-                            <input type="number" id="profile-weight" value="80" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                        </div>
-                        <div>
-                            <label class="text-xs text-slate-400 block mb-1">Рост (см)</label>
-                            <input type="number" id="profile-height" value="186" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="text-xs text-slate-400 block mb-1">Возраст</label>
-                            <input type="number" id="profile-age" value="18" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                        </div>
-                        <div>
-                            <label class="text-xs text-slate-400 block mb-1">Пол</label>
-                            <select id="profile-gender" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                                <option value="male">Мужской</option>
-                                <option value="female">Женский</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="text-xs text-slate-400 block mb-1">Уровень активности</label>
-                        <select id="profile-activity" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                            <option value="1.2">Минимальная (сидячий образ жизни)</option>
-                            <option value="1.375">Лёгкая (тренировки 1-3 раза в неделю)</option>
-                            <option value="1.55" selected>Умеренная (тренировки 3-5 раз)</option>
-                            <option value="1.725">Высокая (интенсивные тренировки 6-7 раз)</option>
-                            <option value="1.9">Очень высокая (тяжелая физическая работа)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-xs text-slate-400 block mb-1">Цель</label>
-                        <select id="profile-goal" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500">
-                            <option value="bulk" selected>Набор массы (+300-500 ккал)</option>
-                            <option value="maintain">Поддержание веса</option>
-                            <option value="cut">Похудение (-400 ккал)</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="pt-2 space-y-2">
-                    <button onclick="calculateAndSaveProfile()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2.5 rounded-xl transition shadow-lg">Рассчитать и сохранить нормы</button>
+                <!-- Карточка прогресса за день -->
+                <div class="bg-dark-900 border border-zinc-800/90 rounded-3xl p-5 shadow-xl relative overflow-hidden">
+                    <!-- Декоративное свечение -->
+                    <div class="absolute -top-16 -right-16 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
                     
-                    <!-- Бэкап и восстановление -->
-                    <div class="grid grid-cols-2 gap-2 pt-2">
-                        <button onclick="exportBackup()" class="bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 py-2 px-3 rounded-xl border border-slate-700 transition">💾 Экспорт базы</button>
-                        <button onclick="document.getElementById('import-file-input').click()" class="bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 py-2 px-3 rounded-xl border border-slate-700 transition">📂 Импорт базы</button>
-                        <input type="file" id="import-file-input" accept=".json" class="hidden" onchange="importBackup(event)">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <p id="current-date-label" class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Сегодня</p>
+                            <h2 class="text-lg font-bold text-white mt-0.5">Сводка за день</h2>
+                        </div>
+                        <button onclick="switchTab('settings')" class="text-xs flex items-center gap-1.5 bg-dark-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-xl border border-zinc-700/60 transition">
+                            <i data-lucide="user-cog" class="w-3.5 h-3.5 text-emerald-400"></i>
+                            <span>Норма: <strong id="header-target-kcal" class="text-white">3400</strong></span>
+                        </button>
+                    </div>
+
+                    <!-- Круговой прогресс калорий + Остаток -->
+                    <div class="flex items-center gap-5">
+                        <div class="relative w-32 h-32 flex-shrink-0 flex items-center justify-center">
+                            <svg class="w-32 h-32" viewBox="0 0 120 120">
+                                <!-- Фоновый круг -->
+                                <circle class="text-zinc-800" stroke-width="10" stroke="currentColor" fill="transparent" r="52" cx="60" cy="60"/>
+                                <!-- Активный прогресс -->
+                                <circle id="kcal-ring" class="text-emerald-400 progress-ring__circle" stroke-width="10" stroke-linecap="round" stroke="currentColor" fill="transparent" r="52" cx="60" cy="60" stroke-dasharray="326.72" stroke-dashoffset="326.72"/>
+                            </svg>
+                            <div class="absolute inset-0 flex flex-col items-center justify-center text-center">
+                                <span id="consumed-kcal" class="text-2xl font-extrabold text-white leading-none">0</span>
+                                <span class="text-[11px] text-zinc-400 mt-1">из <span id="ring-target-kcal">3400</span></span>
+                            </div>
+                        </div>
+
+                        <!-- Детализация калорий -->
+                        <div class="flex-1 space-y-2.5">
+                            <div class="bg-dark-800/80 rounded-2xl p-3 border border-zinc-800">
+                                <div class="flex items-center justify-between text-xs text-zinc-400 mb-0.5">
+                                    <span>Осталось на сегодня</span>
+                                    <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i>
+                                </div>
+                                <div class="flex items-baseline gap-1.5">
+                                    <span id="remaining-kcal" class="text-xl font-extrabold text-emerald-400">3400</span>
+                                    <span class="text-xs text-zinc-400">ккал</span>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2 text-xs">
+                                <div class="bg-dark-800/50 rounded-xl px-2.5 py-2 border border-zinc-800/70">
+                                    <span class="text-zinc-400 block text-[10px]">Приёмов пищи</span>
+                                    <span id="meals-count" class="font-bold text-white text-sm">0</span>
+                                </div>
+                                <div class="bg-dark-800/50 rounded-xl px-2.5 py-2 border border-zinc-800/70">
+                                    <span class="text-zinc-400 block text-[10px]">Прогресс</span>
+                                    <span id="kcal-percent" class="font-bold text-lime-400 text-sm">0%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Полоски Б / Ж / У -->
+                    <div class="grid grid-cols-3 gap-3 mt-5 pt-4 border-t border-zinc-800/80">
+                        <!-- Белки -->
+                        <div class="space-y-1.5">
+                            <div class="flex justify-between text-xs">
+                                <span class="font-semibold text-sky-400">Белки</span>
+                                <span class="text-zinc-400"><strong id="consumed-p" class="text-white">0</strong>/<span id="target-p">180</span>г</span>
+                            </div>
+                            <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                <div id="bar-p" class="h-full bg-sky-400 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <!-- Жиры -->
+                        <div class="space-y-1.5">
+                            <div class="flex justify-between text-xs">
+                                <span class="font-semibold text-amber-400">Жиры</span>
+                                <span class="text-zinc-400"><strong id="consumed-f" class="text-white">0</strong>/<span id="target-f">95</span>г</span>
+                            </div>
+                            <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                <div id="bar-f" class="h-full bg-amber-400 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <!-- Углеводы -->
+                        <div class="space-y-1.5">
+                            <div class="flex justify-between text-xs">
+                                <span class="font-semibold text-emerald-400">Углеводы</span>
+                                <span class="text-zinc-400"><strong id="consumed-c" class="text-white">0</strong>/<span id="target-c">455</span>г</span>
+                            </div>
+                            <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                <div id="bar-c" class="h-full bg-emerald-400 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
-    </main>
 
-    <!-- Модалка сканера штрихкода -->
-    <div id="barcode-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 max-w-sm w-full space-y-4">
-            <div class="flex justify-between items-center">
-                <h3 class="font-bold text-base">Сканер штрихкода</h3>
-                <button onclick="closeBarcodeModal()" class="text-slate-400 hover:text-white">✕</button>
+                <!-- Быстрые кнопки действий -->
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="openAddModal('photo')" class="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-400 hover:to-lime-400 text-zinc-950 font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 transition active:scale-[0.98]">
+                        <i data-lucide="camera" class="w-5 h-5"></i>
+                        <span>Сфоткать еду</span>
+                    </button>
+                    <button onclick="openAddModal('text')" class="flex items-center justify-center gap-2 bg-dark-800 hover:bg-zinc-700 text-white font-semibold py-3.5 px-4 rounded-2xl border border-zinc-700/80 transition active:scale-[0.98]">
+                        <i data-lucide="sparkles" class="w-5 h-5 text-amber-400"></i>
+                        <span>Описать текстом</span>
+                    </button>
+                </div>
+
+                <!-- Список съеденного за день -->
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-bold text-zinc-200 uppercase tracking-wider">Приёмы пищи</h3>
+                        <button onclick="switchTab('coach')" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                            <i data-lucide="bot" class="w-3.5 h-3.5"></i>
+                            <span>Что съесть дальше?</span>
+                        </button>
+                    </div>
+
+                    <div id="meals-list" class="space-y-3">
+                        <!-- Карточки приёмов пищи рендерятся сюда -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- ВКЛАДКА 2: ИИ-НУТРИЦИОЛОГ (COACH) -->
+            <section id="tab-coach" class="hidden space-y-4">
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                            <i data-lucide="bot" class="w-6 h-6"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">AI Нутрициолог</h2>
+                            <p class="text-xs text-zinc-400">Анализ твоего дня и подбор следующих блюд</p>
+                        </div>
+                    </div>
+
+                    <p class="text-xs text-zinc-300 leading-relaxed bg-dark-800/70 p-3.5 rounded-2xl border border-zinc-800">
+                        Я проанализирую всё, что ты уже съел за выбранный день, сравню с твоей нормой (<strong class="text-emerald-400" id="coach-target-display">3400 ккал</strong>) и подскажу, какие продукты добавить, чтобы добрать белок, углеводы и калории без перекосов.
+                    </p>
+
+                    <!-- Дополнительный вопрос тренеру -->
+                    <div>
+                        <label class="block text-xs font-medium text-zinc-400 mb-1.5">Пожелание или вопрос (необязательно):</label>
+                        <input id="coach-custom-query" type="text" placeholder="Например: хочу что-то сладкое на ночь или быстрый ужин..." class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition">
+                    </div>
+
+                    <button id="ask-coach-btn" onclick="askAICoach()" class="w-full bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-400 hover:to-lime-400 text-zinc-950 font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition active:scale-[0.98]">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i>
+                        <span>Проанализировать мой рацион</span>
+                    </button>
+                </div>
+
+                <!-- Блок ответа ИИ-нутрициолога -->
+                <div id="coach-loading" class="hidden bg-dark-900 border border-zinc-800 rounded-3xl p-6 text-center space-y-3">
+                    <div class="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto animate-pulse-glow">
+                        <i data-lucide="brain-circuit" class="w-6 h-6"></i>
+                    </div>
+                    <p class="text-sm font-semibold text-white">ИИ изучает твой дневник...</p>
+                    <p class="text-xs text-zinc-400">Считаем баланс макронутриентов и подбираем рекомендации</p>
+                </div>
+
+                <div id="coach-response-card" class="hidden bg-dark-900 border border-emerald-500/30 rounded-3xl p-5 space-y-3 shadow-xl">
+                    <div class="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                        <span class="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                            <i data-lucide="check-circle-2" class="w-4 h-4"></i> Рекомендация AI
+                        </span>
+                        <button onclick="askAICoach()" class="text-xs text-zinc-400 hover:text-white flex items-center gap-1">
+                            <i data-lucide="refresh-cw" class="w-3 h-3"></i> Обновить
+                        </button>
+                    </div>
+                    <div id="coach-response-text" class="text-sm text-zinc-200 leading-relaxed space-y-2.5 whitespace-pre-line"></div>
+                </div>
+            </section>
+
+            <!-- ВКЛАДКА 3: ПРОФИЛЬ И AI-РАСЧЁТ НОРМЫ -->
+            <section id="tab-settings" class="hidden space-y-4">
+                
+                <!-- Блок 1: Антропометрия и ИИ-расчёт суточной нормы -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-4 relative overflow-hidden">
+                    <div class="absolute -top-14 -right-14 w-36 h-36 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none"></div>
+
+                    <div class="flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                            <i data-lucide="calculator" class="w-6 h-6"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Профиль и AI-расчёт нормы</h2>
+                            <p class="text-xs text-zinc-400">Персональный подбор калорий и БЖУ под твои данные</p>
+                        </div>
+                    </div>
+
+                    <!-- Пол (Мужской / Женский) -->
+                    <div>
+                        <label class="block text-xs font-medium text-zinc-400 mb-1.5">Пол</label>
+                        <div class="grid grid-cols-2 bg-dark-800 p-1 rounded-xl border border-zinc-700/80">
+                            <button type="button" id="gender-male-btn" onclick="selectGender('male')" class="py-2 text-xs font-bold rounded-lg bg-emerald-500 text-zinc-950 transition">
+                                Мужской
+                            </button>
+                            <button type="button" id="gender-female-btn" onclick="selectGender('female')" class="py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition">
+                                Женский
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Возраст, Вес, Рост -->
+                    <div class="grid grid-cols-3 gap-2.5">
+                        <div>
+                            <label class="block text-xs font-medium text-zinc-400 mb-1">Возраст (лет)</label>
+                            <input id="profile-age" type="number" min="12" max="100" value="25" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm font-bold text-white text-center focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-zinc-400 mb-1">Вес (кг)</label>
+                            <input id="profile-weight" type="number" step="0.1" min="30" max="250" value="75" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm font-bold text-white text-center focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-zinc-400 mb-1">Рост (см)</label>
+                            <input id="profile-height" type="number" min="120" max="230" value="180" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm font-bold text-white text-center focus:outline-none focus:border-emerald-500">
+                        </div>
+                    </div>
+
+                    <!-- Образ жизни / Активность -->
+                    <div>
+                        <label class="block text-xs font-medium text-zinc-400 mb-1.5">Образ жизни и активность</label>
+                        <select id="profile-activity" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-medium text-white focus:outline-none focus:border-emerald-500">
+                            <option value="sedentary">Сидячий образ жизни (офис, минимум движения)</option>
+                            <option value="light">Лёгкая активность (1–3 тренировки в неделю / пешие прогулки)</option>
+                            <option value="moderate" selected>Умеренная активность (3–5 тренировок в неделю)</option>
+                            <option value="high">Высокая активность (6–7 тренировок / активная работа)</option>
+                            <option value="extreme">Экстремальная активность (тяжёлый спорт / 2 тренировки в день)</option>
+                        </select>
+                    </div>
+
+                    <!-- Цель -->
+                    <div>
+                        <label class="block text-xs font-medium text-zinc-400 mb-1.5">Твоя главная цель</label>
+                        <select id="profile-goal" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-medium text-white focus:outline-none focus:border-emerald-500">
+                            <option value="bulk" selected>Набор мышечной массы (профицит калорий)</option>
+                            <option value="maintain">Поддержание текущего веса и формы</option>
+                            <option value="cut">Похудение / сушка (дефицит с сохранением мышц)</option>
+                        </select>
+                    </div>
+
+                    <!-- Дополнительные детали -->
+                    <div>
+                        <label class="block text-xs font-medium text-zinc-400 mb-1.5">Дополнительно (особенности тренировок или режима):</label>
+                        <input id="profile-notes" type="text" placeholder="Например: силовые 4 раза в неделю, хочу набирать сухой вес..." class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500">
+                    </div>
+
+                    <!-- Кнопка расчёта с ИИ -->
+                    <button id="calc-norm-btn" onclick="calculateNormWithAI()" class="w-full bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-400 hover:to-lime-400 text-zinc-950 font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition active:scale-[0.98]">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i>
+                        <span>Рассчитать норму с помощью AI</span>
+                    </button>
+
+                    <!-- Индикатор загрузки расчёта -->
+                    <div id="norm-loading" class="hidden py-5 text-center space-y-2 bg-dark-800/60 rounded-2xl border border-zinc-800">
+                        <div class="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto animate-spin">
+                            <i data-lucide="loader-2" class="w-5 h-5"></i>
+                        </div>
+                        <p class="text-xs font-semibold text-white">ИИ рассчитывает метаболизм (BMR/TDEE) и БЖУ...</p>
+                    </div>
+
+                    <!-- Карточка результата ИИ-расчёта -->
+                    <div id="norm-result-card" class="hidden bg-dark-800/90 border border-emerald-500/40 rounded-2xl p-4 space-y-3.5">
+                        <div class="flex items-center justify-between border-b border-zinc-700/80 pb-2">
+                            <span class="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                                <i data-lucide="check-circle-2" class="w-4 h-4"></i> Рекомендованная норма
+                            </span>
+                            <div class="text-[11px] text-zinc-400">
+                                BMR: <strong id="res-bmr" class="text-zinc-200">0</strong> • TDEE: <strong id="res-tdee" class="text-zinc-200">0</strong>
+                            </div>
+                        </div>
+
+                        <!-- Рекомендованные цифры -->
+                        <div class="grid grid-cols-4 gap-2 text-center">
+                            <div class="bg-dark-900 rounded-xl p-2 border border-zinc-800">
+                                <span class="block text-[10px] text-zinc-400">Ккал</span>
+                                <strong id="res-kcal" class="text-sm font-extrabold text-white">0</strong>
+                            </div>
+                            <div class="bg-dark-900 rounded-xl p-2 border border-zinc-800">
+                                <span class="block text-[10px] text-sky-400">Белки</span>
+                                <strong id="res-p" class="text-sm font-extrabold text-white">0г</strong>
+                            </div>
+                            <div class="bg-dark-900 rounded-xl p-2 border border-zinc-800">
+                                <span class="block text-[10px] text-amber-400">Жиры</span>
+                                <strong id="res-f" class="text-sm font-extrabold text-white">0г</strong>
+                            </div>
+                            <div class="bg-dark-900 rounded-xl p-2 border border-zinc-800">
+                                <span class="block text-[10px] text-emerald-400">Углеводы</span>
+                                <strong id="res-c" class="text-sm font-extrabold text-white">0г</strong>
+                            </div>
+                        </div>
+
+                        <!-- Обоснование от ИИ -->
+                        <p id="res-explanation" class="text-xs text-zinc-300 leading-relaxed bg-dark-900/70 p-3 rounded-xl border border-zinc-800/80"></p>
+
+                        <button onclick="applyCalculatedNorm()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold py-3 rounded-xl shadow-md flex items-center justify-center gap-1.5 transition">
+                            <i data-lucide="check" class="w-4 h-4"></i>
+                            <span>Применить эти нормы в дневник</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Блок 2: Ручная корректировка дневных целей -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                            <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Текущие цели в дневнике</h2>
+                            <p class="text-xs text-zinc-400">Можешь подправить цифры вручную в любой момент</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3 pt-1">
+                        <div>
+                            <label class="block text-xs font-medium text-zinc-400 mb-1">Целевая калорийность (ккал)</label>
+                            <input id="setting-kcal" type="number" value="3400" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-emerald-500">
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2.5">
+                            <div>
+                                <label class="block text-xs font-medium text-sky-400 mb-1">Белки (г)</label>
+                                <input id="setting-p" type="number" value="180" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm font-bold text-white focus:outline-none focus:border-sky-400">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-amber-400 mb-1">Жиры (г)</label>
+                                <input id="setting-f" type="number" value="95" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm font-bold text-white focus:outline-none focus:border-amber-400">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-emerald-400 mb-1">Углеводы (г)</label>
+                                <input id="setting-c" type="number" value="455" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm font-bold text-white focus:outline-none focus:border-emerald-400">
+                            </div>
+                        </div>
+
+                        <!-- Быстрые пресеты -->
+                        <div class="pt-1">
+                            <span class="block text-[11px] text-zinc-500 mb-1.5">Быстрые пресеты:</span>
+                            <div class="flex flex-wrap gap-2">
+                                <button type="button" onclick="applyPreset(3400, 180, 95, 455)" class="text-xs bg-dark-800 hover:bg-zinc-700 border border-zinc-700 px-2.5 py-1.5 rounded-lg text-zinc-300">Набор (3400 ккал)</button>
+                                <button type="button" onclick="applyPreset(2600, 160, 75, 320)" class="text-xs bg-dark-800 hover:bg-zinc-700 border border-zinc-700 px-2.5 py-1.5 rounded-lg text-zinc-300">Баланс (2600 ккал)</button>
+                                <button type="button" onclick="applyPreset(2000, 150, 60, 215)" class="text-xs bg-dark-800 hover:bg-zinc-700 border border-zinc-700 px-2.5 py-1.5 rounded-lg text-zinc-300">Сушка (2000 ккал)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="saveSettings()" class="w-full bg-dark-800 hover:bg-zinc-700 border border-zinc-700 text-white font-bold py-3 rounded-2xl transition">
+                        Сохранить ручные цели
+                    </button>
+                </div>
+
+                <!-- Настройка иконки приложения -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-violet-500/15 border border-violet-500/30 flex items-center justify-center text-violet-400">
+                            <i data-lucide="app-window" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Иконка приложения</h2>
+                            <p class="text-xs text-zinc-400">Выбери изображение для ярлыка на телефоне</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <img id="app-icon-preview" alt="Предпросмотр иконки" class="w-16 h-16 rounded-2xl object-cover border border-zinc-700 bg-dark-800">
+                        <div class="flex-1 space-y-2">
+                            <input id="app-icon-input" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange="handleAppIconSelect(event)">
+                            <button type="button" onclick="document.getElementById('app-icon-input').click()" class="w-full bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 border border-violet-500/30 font-semibold py-2.5 rounded-xl text-xs transition">Выбрать свою иконку</button>
+                            <button type="button" onclick="resetAppIcon()" class="w-full text-zinc-400 hover:text-white text-xs py-1">Вернуть стандартную</button>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-zinc-500 leading-relaxed">Лучше использовать квадратное изображение PNG. После изменения иконки уже установленного приложения может понадобиться удалить старый ярлык и установить приложение заново.</p>
+                </div>
+
+                <!-- Облачная синхронизация через Google -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                            <i data-lucide="cloud" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Облачное сохранение</h2>
+                            <p class="text-xs text-zinc-400">Синхронизация дневника через Google</p>
+                        </div>
+                    </div>
+                    <p id="cloud-auth-status" class="text-xs text-zinc-400">Войди через Google, чтобы дневник и твой Gemini API ключ были на всех твоих устройствах.</p>
+                    <button id="google-signin-btn" type="button" onclick="signInWithGoogle()" class="w-full bg-white hover:bg-zinc-200 text-zinc-900 font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 transition">
+                        <i data-lucide="log-in" class="w-4 h-4"></i> Войти через Google
+                    </button>
+                    <button id="google-signout-btn" type="button" onclick="signOutFromCloud()" class="hidden w-full bg-dark-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-semibold py-2.5 rounded-xl text-xs">Выйти из аккаунта</button>
+                    <p class="text-[11px] text-zinc-500 leading-relaxed">Без входа данные хранятся только в этом браузере. После входа дневник и твой Gemini API ключ сохраняются в твоём аккаунте, и доступ к ним есть только у тебя.</p>
+                </div>
+
+                <!-- Блок 3: API Ключ Gemini и Установка PWA на телефон -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                            <i data-lucide="key-round" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-bold text-white">Gemini API Ключ и Приложение</h2>
+                            <p class="text-xs text-zinc-400">Для автономной работы на твоём телефоне</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="block text-xs font-medium text-zinc-300">Твой бесплатный Gemini API Key:</label>
+                        <div class="flex gap-2">
+                            <input id="setting-api-key" type="password" placeholder="AIzaSy..." class="flex-1 bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-sky-400">
+                            <button type="button" onclick="toggleApiKeyVisibility()" class="px-3 bg-dark-800 border border-zinc-700 rounded-xl text-zinc-400 hover:text-white transition" title="Показать/скрыть ключ">
+                                <i id="api-key-eye-icon" data-lucide="eye" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <p class="text-[11px] text-zinc-500 leading-relaxed">
+                            Ключ сохраняется на этом устройстве, а если ты вошёл через Google, то и в твоём аккаунте, поэтому на других устройствах достаточно просто войти. Бесплатный ключ можно получить в <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" class="text-sky-400 underline">Google AI Studio</a>.
+                        </p>
+                        <button type="button" onclick="saveApiKeySetting()" class="w-full bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 font-semibold py-2.5 rounded-xl text-xs transition">
+                            Сохранить API ключ
+                        </button>
+                    </div>
+
+                    <div class="pt-3 border-t border-zinc-800/80 flex items-center justify-between gap-3">
+                        <div>
+                            <h3 class="text-sm font-semibold text-white">Установить как приложение</h3>
+                            <p class="text-xs text-zinc-400">Иконка на экран «Домой» (Android / iOS)</p>
+                        </div>
+                        <button type="button" onclick="triggerPwaInstall()" class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-lime-500 text-zinc-950 text-xs font-bold shadow-md flex items-center gap-1.5 flex-shrink-0 active:scale-95 transition">
+                            <i data-lucide="smartphone" class="w-4 h-4"></i>
+                            <span>Установить</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Очистка данных -->
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-semibold text-white">Сбросить дневник за сегодня</h3>
+                        <p class="text-xs text-zinc-400">Удалить все приёмы пищи за выбранную дату</p>
+                    </div>
+                    <button onclick="clearCurrentDayMeals()" class="px-3.5 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 text-xs font-semibold border border-red-500/30 transition">
+                        Очистить
+                    </button>
+                </div>
+
+                <!-- Версия сайта (меняй при каждом обновлении файла) -->
+                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.0 · 19.11.2026 · сборка 4</p>
+            </section>
+
+        </main>
+
+        <!-- Нижняя навигационная панель (Нативный Tab Bar для смартфона) -->
+        <nav class="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
+            <div class="w-full max-w-lg bg-dark-900/95 backdrop-blur-xl border-t border-zinc-800/90 px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] grid grid-cols-4 items-end pointer-events-auto shadow-2xl">
+                <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-emerald-400 transition active:scale-95">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+                    <span class="text-[11px] font-semibold">Дневник</span>
+                </button>
+
+                <!-- Вкладка / Кнопка Фото AI -->
+                <button onclick="openAddModal('photo')" id="nav-photo" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-zinc-300 hover:text-emerald-400 transition active:scale-95 relative">
+                    <div class="-mt-6 w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-lime-400 text-zinc-950 flex items-center justify-center shadow-lg shadow-emerald-500/30 border-2 border-dark-950">
+                        <i data-lucide="camera" class="w-6 h-6"></i>
+                    </div>
+                    <span class="text-[11px] font-bold text-emerald-400">Фото AI</span>
+                </button>
+
+                <button onclick="switchTab('coach')" id="nav-coach" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-zinc-400 hover:text-zinc-200 transition active:scale-95">
+                    <i data-lucide="bot" class="w-5 h-5"></i>
+                    <span class="text-[11px] font-semibold">Тренер</span>
+                </button>
+
+                <button onclick="switchTab('settings')" id="nav-settings" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-zinc-400 hover:text-zinc-200 transition active:scale-95">
+                    <i data-lucide="user-cog" class="w-5 h-5"></i>
+                    <span class="text-[11px] font-semibold">Профиль</span>
+                </button>
             </div>
-            <div id="barcode-reader" class="overflow-hidden rounded-xl border border-slate-800"></div>
-            <p class="text-xs text-slate-400 text-center">Наведите камеру на штрихкод продукта на упаковке</p>
+        </nav>
+
+        <!-- МОДАЛЬНОЕ ОКНО ИНСТРУКЦИИ УСТАНОВКИ PWA -->
+        <div id="install-modal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div class="w-full max-w-md bg-dark-900 border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-3xl p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] space-y-4 shadow-2xl">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2.5">
+                        <div class="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
+                            <i data-lucide="smartphone" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-base font-bold text-white">Установка на телефон</h3>
+                            <p class="text-[11px] text-zinc-400">Работает как обычное приложение без рамки браузера</p>
+                        </div>
+                    </div>
+                    <button onclick="closeInstallModal()" class="p-1.5 rounded-xl bg-dark-800 text-zinc-400 hover:text-white transition">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+
+                <!-- Блок прямой установки (если браузер выдал prompt) -->
+                <div id="native-install-box" class="hidden bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 space-y-2.5 text-center">
+                    <p class="text-xs text-zinc-200 font-medium">Твой браузер поддерживает мгновенную установку в один клик:</p>
+                    <button onclick="executeNativeInstall()" class="w-full bg-gradient-to-r from-emerald-500 to-lime-500 text-zinc-950 font-extrabold py-3 rounded-xl shadow-lg flex items-center justify-center gap-2">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        <span>Установить приложение сейчас</span>
+                    </button>
+                </div>
+
+                <!-- Пошаговая инструкция для iOS и Android -->
+                <div class="space-y-3 text-xs">
+                    <div class="bg-dark-800/80 border border-zinc-700/70 rounded-2xl p-3.5 space-y-2">
+                        <div class="flex items-center gap-2 font-bold text-white">
+                            <i data-lucide="apple" class="w-4 h-4 text-zinc-300"></i>
+                            <span>Для iPhone (Safari):</span>
+                        </div>
+                        <ol class="list-decimal list-inside space-y-1 text-zinc-300 leading-relaxed">
+                            <li>Открой эту страницу по <code class="text-emerald-400">https://</code> ссылке в браузере <strong>Safari</strong>.</li>
+                            <li>Нажми кнопку <strong>«Поделиться»</strong> (квадрат со стрелкой вверх внизу экрана).</li>
+                            <li>Пролистай вниз и выбери <strong>«На экран "Домой"»</strong> <span class="text-zinc-400">(Add to Home Screen)</span>.</li>
+                        </ol>
+                    </div>
+
+                    <div class="bg-dark-800/80 border border-zinc-700/70 rounded-2xl p-3.5 space-y-2">
+                        <div class="flex items-center gap-2 font-bold text-white">
+                            <i data-lucide="smartphone" class="w-4 h-4 text-emerald-400"></i>
+                            <span>Для Android (Chrome):</span>
+                        </div>
+                        <ol class="list-decimal list-inside space-y-1 text-zinc-300 leading-relaxed">
+                            <li>Открой страницу по <code class="text-emerald-400">https://</code> ссылке в <strong>Google Chrome</strong>.</li>
+                            <li>Нажми на <strong>три точки (⋮)</strong> в правом верхнем углу.</li>
+                            <li>Выбери <strong>«Установить приложение»</strong> или <strong>«Добавить на гл. экран»</strong>.</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <button onclick="closeInstallModal()" class="w-full bg-dark-800 hover:bg-zinc-700 text-white font-semibold py-3 rounded-2xl transition text-xs">
+                    Понятно
+                </button>
+            </div>
         </div>
-    </div>
 
-    <!-- Модалка предпросмотра и редактирования блюда -->
-    <div id="meal-preview-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto space-y-4">
-            <h3 class="font-bold text-lg">Результат анализа</h3>
-            <div id="modal-items-container" class="space-y-3">
-                <!-- Сюда динамически рендерятся продукты с инпутами граммов -->
-            </div>
-            <div class="flex space-x-2 pt-2">
-                <button onclick="closeMealModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 py-2.5 rounded-xl font-medium text-sm transition">Отмена</button>
-                <button onclick="confirmAndSaveMeal()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2.5 rounded-xl font-medium text-sm transition text-white">Добавить в дневник</button>
+        <!-- МОДАЛЬНОЕ ОКНО ДОБАВЛЕНИЯ И АНАЛИЗА ЕДЫ -->
+        <div id="add-modal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div class="w-full max-w-lg bg-dark-900 border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col overflow-hidden shadow-2xl">
+                
+                <!-- Заголовок модального окна -->
+                <div class="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                        <h3 id="modal-title" class="text-base font-bold text-white">Добавить приём пищи</h3>
+                    </div>
+                    <button onclick="closeAddModal()" class="p-1.5 rounded-xl bg-dark-800 text-zinc-400 hover:text-white transition">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+
+                <!-- Тело модального окна -->
+                <div class="p-5 overflow-y-auto space-y-4 flex-1">
+
+                    <!-- Избранные блюда -->
+                    <div id="favorites-block" class="hidden">
+                        <label class="block text-xs font-medium text-zinc-300 mb-1.5">Избранное (нажми, чтобы добавить без ИИ):</label>
+                        <div id="favorites-list" class="flex gap-2 overflow-x-auto no-scrollbar"></div>
+                    </div>
+                    
+                    <!-- Переключатель режима Фото / Текст -->
+                    <div class="grid grid-cols-2 bg-dark-800 p-1 rounded-xl border border-zinc-800">
+                        <button id="mode-photo-btn" onclick="setModalMode('photo')" class="py-2 text-xs font-bold rounded-lg bg-zinc-700 text-white transition flex items-center justify-center gap-1.5">
+                            <i data-lucide="camera" class="w-4 h-4 text-emerald-400"></i> По фото + текст
+                        </button>
+                        <button id="mode-text-btn" onclick="setModalMode('text')" class="py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5">
+                            <i data-lucide="type" class="w-4 h-4 text-amber-400"></i> Только текстом
+                        </button>
+                    </div>
+
+                    <!-- Блок загрузки фото -->
+                    <div id="photo-input-section" class="space-y-3">
+                        <label id="photo-dropzone" class="block relative border-2 border-dashed border-zinc-700 hover:border-emerald-500/70 rounded-2xl p-5 text-center cursor-pointer transition bg-dark-800/40 overflow-hidden">
+                            <input id="food-photo-input" type="file" accept="image/*" capture="environment" class="hidden" onchange="handlePhotoSelect(event)">
+                            
+                            <!-- Плейсхолдер до выбора фото -->
+                            <div id="photo-placeholder" class="space-y-2 py-3">
+                                <div class="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mx-auto">
+                                    <i data-lucide="camera" class="w-6 h-6"></i>
+                                </div>
+                                <p class="text-sm font-semibold text-white">Нажми, чтобы сфоткать или выбрать фото</p>
+                                <p class="text-xs text-zinc-400">ИИ определит блюда на тарелке и посчитает граммовку</p>
+                            </div>
+
+                            <!-- Превью выбранного фото -->
+                            <div id="photo-preview-container" class="hidden relative">
+                                <img id="photo-preview-img" src="" alt="Превью еды" class="w-full max-h-56 object-cover rounded-xl mx-auto">
+                                <span class="absolute bottom-2 right-2 bg-black/75 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-lg flex items-center gap-1">
+                                    <i data-lucide="refresh-cw" class="w-3 h-3"></i> Заменить фото
+                                </span>
+                            </div>
+                        </label>
+                    </div>
+
+                    <!-- Поле текстового уточнения / описания -->
+                    <div>
+                        <label id="note-label" class="block text-xs font-medium text-zinc-300 mb-1.5">
+                            Уточнение для ИИ (скрытые ингредиенты, вес, соусы):
+                        </label>
+                        <textarea id="food-note-input" rows="2" placeholder="Например: там в творог ещё ложка мёда, жарил на оливковом масле..." class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition"></textarea>
+                    </div>
+
+                    <!-- Кнопка запуска распознавания ИИ -->
+                    <button id="analyze-btn" onclick="analyzeFoodWithAI()" class="w-full bg-gradient-to-r from-emerald-500 to-lime-500 hover:from-emerald-400 hover:to-lime-400 text-zinc-950 font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition active:scale-[0.98]">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i>
+                        <span>Распознать и посчитать КБЖУ</span>
+                    </button>
+
+                    <!-- Индикатор загрузки ИИ -->
+                    <div id="ai-analyzing-state" class="hidden py-6 text-center space-y-3 bg-dark-800/50 rounded-2xl border border-zinc-800">
+                        <div class="w-11 h-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto animate-spin">
+                            <i data-lucide="loader-2" class="w-6 h-6"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-bold text-white">ИИ анализирует блюдо...</p>
+                            <p class="text-xs text-zinc-400 mt-0.5">Оцениваем порции, белки, жиры и углеводы</p>
+                        </div>
+                    </div>
+
+                    <!-- РЕЗУЛЬТАТ РАСПОЗНАВАНИЯ (Редактируемый список продуктов) -->
+                    <div id="recognition-results" class="hidden space-y-3 pt-2 border-t border-zinc-800">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Распознанные продукты</h4>
+                            <button onclick="addEmptyFoodItem()" class="text-xs bg-dark-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded-lg border border-zinc-700 flex items-center gap-1">
+                                <i data-lucide="plus" class="w-3.5 h-3.5 text-emerald-400"></i> Добавить пункт
+                            </button>
+                        </div>
+
+                        <p class="text-[11px] text-zinc-400">Ты можешь подправить вес или значения перед сохранением — КБЖУ пересчитается автоматически.</p>
+
+                        <!-- Контейнер строк продуктов -->
+                        <div id="detected-items-list" class="space-y-2.5"></div>
+
+                        <!-- Итоговая плашка перед сохранением -->
+                        <div class="bg-dark-800 border border-emerald-500/30 rounded-2xl p-3.5 flex items-center justify-between">
+                            <div>
+                                <span class="text-[11px] text-zinc-400 block">Итого за приём пищи:</span>
+                                <span class="text-lg font-extrabold text-white"><span id="modal-total-kcal">0</span> ккал</span>
+                            </div>
+                            <div class="flex gap-3 text-xs font-semibold">
+                                <span class="text-sky-400">Б: <strong id="modal-total-p">0</strong>г</span>
+                                <span class="text-amber-400">Ж: <strong id="modal-total-f">0</strong>г</span>
+                                <span class="text-emerald-400">У: <strong id="modal-total-c">0</strong>г</span>
+                            </div>
+                        </div>
+
+                        <button onclick="addCurrentToFavorites()" class="w-full bg-dark-800 hover:bg-zinc-700 text-white font-semibold py-3 rounded-2xl transition text-xs flex items-center justify-center gap-2">
+                            <i data-lucide="star" class="w-4 h-4 text-amber-400"></i>
+                            <span>Сохранить в избранное</span>
+                        </button>
+
+                        <button onclick="saveMealToLog()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold py-3.5 px-4 rounded-2xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition">
+                            <i data-lucide="check" class="w-5 h-5"></i>
+                            <span>Добавить в дневник за день</span>
+                        </button>
+                    </div>
+
+                </div>
             </div>
         </div>
+
+        <!-- Компактный календарь дневника -->
+        <div id="calendar-modal" class="hidden fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this) closeCalendar()">
+            <div class="w-full max-w-sm bg-dark-900 border border-zinc-700 rounded-3xl p-4 shadow-2xl space-y-4">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-base font-bold text-white">История питания</h2>
+                    <button type="button" onclick="closeCalendar()" class="p-2 text-zinc-400 hover:text-white rounded-xl"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+                <div class="flex items-center justify-between">
+                    <button type="button" onclick="changeCalendarMonth(-1)" class="p-2 rounded-xl bg-dark-800 text-zinc-300 hover:text-white"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+                    <div id="calendar-month-label" class="text-sm font-bold text-white"></div>
+                    <button type="button" onclick="changeCalendarMonth(1)" class="p-2 rounded-xl bg-dark-800 text-zinc-300 hover:text-white"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+                </div>
+                <div class="grid grid-cols-7 gap-1 text-center" id="calendar-grid"></div>
+                <div class="flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-zinc-400">
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Есть записи</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-zinc-600"></span> Нет записей</span>
+                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Выбранный день</span>
+                </div>
+                <div id="calendar-selected-info" class="bg-dark-800 rounded-2xl p-3 text-xs text-zinc-300"></div>
+                <button type="button" onclick="goToCalendarToday()" class="w-full py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">Перейти к сегодняшнему дню</button>
+            </div>
+        </div>
+
+        <!-- Всплывающее уведомление (Toast) -->
+        <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 hidden bg-zinc-800 border border-zinc-700 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 transition-all">
+            <i id="toast-icon" data-lucide="info" class="w-4 h-4 text-emerald-400"></i>
+            <span id="toast-message">Сообщение</span>
+        </div>
+
     </div>
 
-    <!-- Глобальный лоадер -->
-    <div id="global-loader" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center space-y-3 hidden">
-        <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-        <p id="loader-text" class="text-sm font-medium text-slate-300">Загрузка...</p>
-    </div>
-
-    <!-- Нижняя навигация (Tab Bar) -->
-    <nav class="bg-slate-900 border-t border-slate-800 py-2 px-4 fixed bottom-0 left-0 right-0 z-40 max-w-md mx-auto flex justify-around items-center">
-        <button onclick="switchTab('diary')" id="nav-diary" class="flex flex-col items-center space-y-1 text-blue-400 transition">
-            <span class="text-lg">📊</span>
-            <span class="text-[10px] font-medium">Дневник</span>
-        </button>
-        <button onclick="switchTab('ai')" id="nav-ai" class="flex flex-col items-center space-y-1 text-slate-400 hover:text-slate-200 transition">
-            <span class="text-lg">📷</span>
-            <span class="text-[10px] font-medium">Фото AI</span>
-        </button>
-        <button onclick="switchTab('trainer')" id="nav-trainer" class="flex flex-col items-center space-y-1 text-slate-400 hover:text-slate-200 transition">
-            <span class="text-lg">🤖</span>
-            <span class="text-[10px] font-medium">AI Тренер</span>
-        </button>
-        <button onclick="switchTab('profile')" id="nav-profile" class="flex flex-col items-center space-y-1 text-slate-400 hover:text-slate-200 transition">
-            <span class="text-lg">⚙️</span>
-            <span class="text-[10px] font-medium">Профиль</span>
-        </button>
-    </nav>
-
-    <!-- Подключаем логику -->
-    <script src="./js/app.js"></script>
+    <script src="js/app.js?v=4"></script>
 </body>
 </html>
