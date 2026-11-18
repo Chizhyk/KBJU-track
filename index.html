@@ -1573,6 +1573,26 @@
             }
         }
 
+        function describeAiError(error) {
+            const raw = String(error && error.message || error || '');
+            let apiMsg = '';
+            const i = raw.indexOf('{');
+            if (i >= 0) {
+                try { apiMsg = (JSON.parse(raw.slice(i)).error || {}).message || ''; } catch (e) { apiMsg = raw.slice(i, i + 160); }
+            }
+            const code = (raw.match(/\((\d{3})\)/) || raw.match(/HTTP (\d{3})/) || [])[1];
+            let reason;
+            if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) reason = 'Нет связи с Gemini (интернет, VPN или блокировщик рекламы).';
+            else if (code === '429') reason = 'Закончился лимит Gemini. Подожди минуту или попробуй позже.';
+            else if (/API key not valid|API_KEY_INVALID|expired/i.test(raw)) reason = 'Gemini не принял ключ. Проверь API ключ в Настройках.';
+            else if (code === '404') reason = 'Модель Gemini недоступна (' + GEMINI_MODEL + ').';
+            else if (code === '403') reason = 'Доступ запрещён. Ключ ограничен или Gemini недоступен для твоего аккаунта/региона.';
+            else if (/JSON|Unexpected token|Пустой ответ/i.test(raw)) reason = 'Gemini вернул непонятный ответ. Попробуй ещё раз.';
+            else reason = 'Не удалось распознать.';
+            const detail = (apiMsg || raw).replace(/\s+/g, ' ').slice(0, 140);
+            return reason + (code ? ' [' + code + '] ' : ' ') + detail;
+        }
+
         async function analyzeFoodWithAI() {
             const noteText = document.getElementById('food-note-input').value.trim();
 
@@ -1676,12 +1696,7 @@
                 showToast("Еда успешно распознана!", "check-circle-2");
             } catch (error) {
                 console.error("Ошибка распознавания:", error);
-                const msg = String(error && error.message || '');
-                if (/API Error \((400|401|403)\)/.test(msg) && /API key|API_KEY|PERMISSION|invalid/i.test(msg)) {
-                    showToast("Gemini не принял ключ. Проверь API ключ в Настройках.", "alert-circle");
-                } else {
-                    showToast("Не удалось распознать. Попробуй ещё раз или добавь вручную.", "alert-circle");
-                }
+                showToast(describeAiError(error), "alert-circle", 10000);
             } finally {
                 analyzeBtn.disabled = false;
                 analyzeBtn.classList.remove('opacity-50');
@@ -2110,7 +2125,7 @@ ${state.profile.notes ? `- Дополнительные пожелания: ${st
         }
 
         let toastTimeout;
-        function showToast(message, iconName = "info") {
+        function showToast(message, iconName = "info", duration = 3000) {
             const toast = document.getElementById('toast');
             const msgEl = document.getElementById('toast-message');
             const iconEl = document.getElementById('toast-icon');
@@ -2123,7 +2138,7 @@ ${state.profile.notes ? `- Дополнительные пожелания: ${st
             clearTimeout(toastTimeout);
             toastTimeout = setTimeout(() => {
                 toast.classList.add('hidden');
-            }, 3000);
+            }, duration);
         }
 
         function escapeHtml(str) {
