@@ -24,7 +24,22 @@
     <script src="https://unpkg.com/@zxing/browser@0.2.1"></script>
     
     
-    <link rel="stylesheet" href="css/styles.css?v=5">
+    <script>
+      // KBJU Track v6: тема автоматически следует настройкам устройства.
+      (() => {
+        const media = window.matchMedia('(prefers-color-scheme: dark)');
+        const applyTheme = () => {
+          document.documentElement.classList.toggle('dark', media.matches);
+          document.documentElement.classList.toggle('light', !media.matches);
+          document.documentElement.style.colorScheme = media.matches ? 'dark' : 'light';
+          const meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.content = media.matches ? '#101216' : '#f4f6f8';
+        };
+        applyTheme();
+        media.addEventListener?.('change', applyTheme);
+      })();
+    </script>
+    <link rel="stylesheet" href="css/styles.css?v=6">
 </head>
 <body class="min-h-screen flex flex-col items-center justify-start sm:pb-10 selection:bg-emerald-500 selection:text-zinc-950">
 
@@ -39,7 +54,7 @@
                 </div>
                 <div class="truncate">
                     <h1 class="text-sm sm:text-base font-bold tracking-tight text-white leading-none truncate">AI КБЖУ</h1>
-                    <span class="text-[10px] sm:text-[11px] text-emerald-400 font-medium block truncate">Умный трекер</span>
+                    <span class="text-[10px] sm:text-[11px] text-emerald-400 font-medium block truncate">Умный трекер <span class="build-version">• v6</span></span>
                 </div>
             </div>
 
@@ -566,7 +581,7 @@
         </main>
 
         <!-- Нижняя навигационная панель (Нативный Tab Bar для смартфона) -->
-        <nav class="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
+        <nav aria-label="Основная навигация" class="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
             <div class="w-full max-w-lg bg-dark-900/95 backdrop-blur-xl border-t border-zinc-800/90 px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] grid grid-cols-5 items-end pointer-events-auto shadow-2xl">
                 <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-emerald-400 transition active:scale-95">
                     <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
@@ -843,6 +858,6 @@
 
     </div>
 
-    <script src="js/app.js?v=5"></script>
+    <script src="js/app.js?v=6"></script>
 </body>
 </html>

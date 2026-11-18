@@ -1,0 +1,195 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+        body {
+            background-color: #09090b;
+            color: #f4f4f5;
+            -webkit-tap-highlight-color: transparent;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+        }
+        /* Скрытие скроллбаров для аккуратного мобильного вида */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* Плавная анимация колец прогресса */
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+        /* Пульсация загрузки */
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.03); }
+        }
+        .animate-pulse-glow {
+            animation: pulse-glow 2s infinite ease-in-out;
+        }
+    
+
+
+/* ==========================================
+   KBJU TRACK v6 — MOBILE-FIRST MODERN UI
+   ========================================== */
+:root {
+  --app-bg: #101216;
+  --surface: #191d23;
+  --surface-raised: #20252d;
+  --surface-soft: #252b34;
+  --line: rgba(148, 163, 184, .13);
+  --text-main: #f4f7f8;
+  --text-muted: #9ba6b2;
+  --accent: #36d399;
+  --accent-strong: #20bd83;
+  --nav-bg: rgba(23, 27, 33, .94);
+}
+html { background: var(--app-bg); }
+html.dark { color-scheme: dark; }
+body {
+  background: var(--app-bg) !important;
+  color: var(--text-main) !important;
+  letter-spacing: -.012em;
+  overscroll-behavior-y: none;
+}
+body > div,
+body .max-w-lg {
+  background-color: var(--app-bg);
+}
+header {
+  background: rgba(16, 18, 22, .88) !important;
+  border-color: var(--line) !important;
+  min-height: 62px;
+  padding-top: max(.75rem, env(safe-area-inset-top)) !important;
+}
+main { padding-top: 1rem !important; padding-bottom: 1.25rem; }
+main section { scroll-margin-top: 76px; }
+main .rounded-3xl {
+  border-radius: 1.45rem !important;
+}
+main .bg-dark-900 {
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+  box-shadow: 0 12px 32px rgba(0,0,0,.13);
+}
+main .bg-dark-800,
+main .bg-dark-800\/80,
+main .bg-dark-800\/50 {
+  background: var(--surface-raised) !important;
+  border-color: var(--line) !important;
+}
+main .border-zinc-800,
+main .border-zinc-800\/70,
+main .border-zinc-800\/80,
+main .border-zinc-800\/90,
+header .border-zinc-800\/80 {
+  border-color: var(--line) !important;
+}
+button, input, select, textarea { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+main button, nav button {
+  transition: transform .16s ease, background-color .16s ease, border-color .16s ease, color .16s ease;
+}
+main input, main select, main textarea,
+#add-modal input, #add-modal select, #add-modal textarea {
+  border-radius: .9rem;
+}
+.build-version {
+  color: #82918b;
+  font-size: 9px;
+  letter-spacing: .04em;
+  margin-left: 3px;
+}
+nav > div {
+  background: var(--nav-bg) !important;
+  border-color: var(--line) !important;
+  box-shadow: 0 -8px 30px rgba(0,0,0,.18) !important;
+  padding-top: .55rem !important;
+  backdrop-filter: blur(22px);
+}
+nav .nav-btn { min-height: 48px; }
+nav .nav-btn span { letter-spacing: -.02em; }
+nav #nav-photo > div {
+  border-color: var(--app-bg) !important;
+  box-shadow: 0 7px 22px rgba(32, 211, 145, .22) !important;
+}
+header button, main button { touch-action: manipulation; }
+@media (max-width: 380px) {
+  main { padding-left: .8rem !important; padding-right: .8rem !important; }
+  main .text-2xl { font-size: 1.35rem; }
+  nav .nav-btn span { font-size: 10px; }
+}
+@media (min-width: 640px) {
+  body { padding-bottom: 2rem !important; }
+}
+
+/* Светлая тема — автоматически включается, если устройство настроено на неё. */
+html.light {
+  --app-bg: #f3f5f7;
+  --surface: #ffffff;
+  --surface-raised: #f0f3f5;
+  --surface-soft: #e8edf0;
+  --line: rgba(31, 41, 55, .10);
+  --text-main: #17212b;
+  --text-muted: #667381;
+  --nav-bg: rgba(255, 255, 255, .94);
+  background: var(--app-bg);
+}
+html.light body,
+html.light body > div,
+html.light body .max-w-lg {
+  background: var(--app-bg) !important;
+  color: var(--text-main) !important;
+}
+html.light header {
+  background: rgba(255,255,255,.88) !important;
+}
+html.light main .bg-dark-900,
+html.light .bg-dark-900 {
+  background: #fff !important;
+  border-color: var(--line) !important;
+  box-shadow: 0 8px 24px rgba(31,41,55,.055);
+}
+html.light main .bg-dark-800,
+html.light main .bg-dark-800\/80,
+html.light main .bg-dark-800\/50,
+html.light .bg-dark-800 {
+  background: #f1f4f6 !important;
+  border-color: var(--line) !important;
+}
+html.light .text-white,
+html.light main .text-white,
+html.light header .text-white {
+  color: #17212b !important;
+}
+html.light .text-zinc-200 { color: #344150 !important; }
+html.light .text-zinc-300 { color: #4c5967 !important; }
+html.light .text-zinc-400 { color: #71808e !important; }
+html.light .text-zinc-500 { color: #82909c !important; }
+html.light .border-zinc-700,
+html.light .border-zinc-700\/60,
+html.light .border-zinc-800,
+html.light .border-zinc-800\/70,
+html.light .border-zinc-800\/80,
+html.light .border-zinc-800\/90 {
+  border-color: rgba(31,41,55,.11) !important;
+}
+html.light nav > div {
+  background: var(--nav-bg) !important;
+  border-color: var(--line) !important;
+}
+html.light .shadow-2xl { box-shadow: 0 12px 34px rgba(31,41,55,.12) !important; }
+html.light .bg-zinc-800 { background: #e8edf0 !important; }
+html.light .text-zinc-950 { color: #102019 !important; }
+html.light .bg-black\/80 { background: rgba(18,24,30,.55) !important; }
+html.light .build-version { color: #7b8b85; }
+
