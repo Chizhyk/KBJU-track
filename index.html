@@ -24,7 +24,7 @@
     <script src="https://unpkg.com/@zxing/browser@0.2.1"></script>
     
     
-    <link rel="stylesheet" href="css/styles.css?v=4">
+    <link rel="stylesheet" href="css/styles.css?v=5">
 </head>
 <body class="min-h-screen flex flex-col items-center justify-start sm:pb-10 selection:bg-emerald-500 selection:text-zinc-950">
 
@@ -188,6 +188,53 @@
                     <div id="meals-list" class="space-y-3">
                         <!-- Карточки приёмов пищи рендерятся сюда -->
                     </div>
+                </div>
+            </section>
+
+            <!-- ВКЛАДКА 2: БАЗА ПРОДУКТОВ -->
+            <section id="tab-products" class="hidden space-y-4">
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400"><i data-lucide="library" class="w-6 h-6"></i></div>
+                        <div><h2 class="text-base font-bold text-white">База продуктов</h2><p class="text-xs text-zinc-400">Поиск, избранное и свои продукты</p></div>
+                    </div>
+                    <div class="flex gap-2">
+                        <input id="product-search-input" type="search" placeholder="Например, молоко или банан" onkeydown="if(event.key==='Enter') searchProductDatabase()" class="min-w-0 flex-1 bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500">
+                        <button onclick="searchProductDatabase()" class="px-4 rounded-xl bg-emerald-500 text-zinc-950 font-bold text-sm"><i data-lucide="search" class="w-4 h-4"></i></button>
+                    </div>
+                    <p class="text-[11px] text-zinc-500">Поиск по Open Food Facts. Пищевая ценность указана на 100 г — проверяй её по упаковке.</p>
+                </div>
+                <div class="space-y-2">
+                    <p class="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Категории</p>
+                    <div class="flex gap-2 overflow-x-auto no-scrollbar">
+                        <button onclick="searchProductCategory('молочные продукты')" class="product-filter">Молочные</button>
+                        <button onclick="searchProductCategory('фрукты')" class="product-filter">Фрукты</button>
+                        <button onclick="searchProductCategory('овощи')" class="product-filter">Овощи</button>
+                        <button onclick="searchProductCategory('хлеб и крупы')" class="product-filter">Хлеб и крупы</button>
+                        <button onclick="searchProductCategory('напитки')" class="product-filter">Напитки</button>
+                    </div>
+                </div>
+                <div class="flex gap-2 overflow-x-auto no-scrollbar" id="product-filter-row">
+                    <button onclick="setProductFilter('all')" data-product-filter="all" class="product-filter active">Все</button>
+                    <button onclick="setProductFilter('recent')" data-product-filter="recent" class="product-filter">Недавние</button>
+                    <button onclick="setProductFilter('favorite')" data-product-filter="favorite" class="product-filter">Избранное</button>
+                    <button onclick="setProductFilter('custom')" data-product-filter="custom" class="product-filter">Мои продукты</button>
+                </div>
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-4 space-y-3">
+                    <div class="flex items-center justify-between"><h3 id="product-list-title" class="text-sm font-bold text-white">Все продукты</h3><span id="product-result-count" class="text-[11px] text-zinc-500"></span></div>
+                    <p id="product-db-status" class="hidden text-xs text-zinc-400"></p>
+                    <div id="product-database-list" class="space-y-2"><p class="text-xs text-zinc-500 text-center py-5">Введи название продукта для поиска или выбери категорию выше.</p></div>
+                </div>
+                <div class="bg-dark-900 border border-zinc-800 rounded-3xl p-5 space-y-3">
+                    <div><h3 class="text-sm font-bold text-white">Добавить свой продукт</h3><p class="text-[11px] text-zinc-400">Если продукта нет в общей базе, можно сохранить его вручную</p></div>
+                    <input id="custom-product-name" type="text" placeholder="Название продукта" class="w-full bg-dark-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500">
+                    <div class="grid grid-cols-4 gap-2">
+                        <label class="text-[10px] text-zinc-400">Ккал<input id="custom-product-kcal" type="number" min="0" placeholder="ккал" class="mt-1 w-full bg-dark-800 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-white"></label>
+                        <label class="text-[10px] text-zinc-400">Белки<input id="custom-product-p" type="number" min="0" step="0.1" placeholder="г" class="mt-1 w-full bg-dark-800 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-white"></label>
+                        <label class="text-[10px] text-zinc-400">Жиры<input id="custom-product-f" type="number" min="0" step="0.1" placeholder="г" class="mt-1 w-full bg-dark-800 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-white"></label>
+                        <label class="text-[10px] text-zinc-400">Углеводы<input id="custom-product-c" type="number" min="0" step="0.1" placeholder="г" class="mt-1 w-full bg-dark-800 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-white"></label>
+                    </div>
+                    <button onclick="saveCustomProduct()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 rounded-xl text-sm">Сохранить свой продукт</button>
                 </div>
             </section>
 
@@ -513,14 +560,14 @@
                 </div>
 
                 <!-- Версия сайта (меняй при каждом обновлении файла) -->
-                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.0 · 19.11.2026 · сборка 4</p>
+                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.1 · 19.11.2026 · сборка 5</p>
             </section>
 
         </main>
 
         <!-- Нижняя навигационная панель (Нативный Tab Bar для смартфона) -->
         <nav class="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none">
-            <div class="w-full max-w-lg bg-dark-900/95 backdrop-blur-xl border-t border-zinc-800/90 px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] grid grid-cols-4 items-end pointer-events-auto shadow-2xl">
+            <div class="w-full max-w-lg bg-dark-900/95 backdrop-blur-xl border-t border-zinc-800/90 px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] grid grid-cols-5 items-end pointer-events-auto shadow-2xl">
                 <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-emerald-400 transition active:scale-95">
                     <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
                     <span class="text-[11px] font-semibold">Дневник</span>
@@ -532,6 +579,11 @@
                         <i data-lucide="camera" class="w-6 h-6"></i>
                     </div>
                     <span class="text-[11px] font-bold text-emerald-400">Фото AI</span>
+                </button>
+
+                <button onclick="switchTab('products')" id="nav-products" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-zinc-400 hover:text-zinc-200 transition active:scale-95">
+                    <i data-lucide="library" class="w-5 h-5"></i>
+                    <span class="text-[11px] font-semibold">Продукты</span>
                 </button>
 
                 <button onclick="switchTab('coach')" id="nav-coach" class="nav-btn flex flex-col items-center justify-center gap-1 py-1 text-zinc-400 hover:text-zinc-200 transition active:scale-95">
@@ -791,6 +843,6 @@
 
     </div>
 
-    <script src="js/app.js?v=4"></script>
+    <script src="js/app.js?v=5"></script>
 </body>
 </html>

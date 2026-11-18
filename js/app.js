@@ -361,6 +361,8 @@
                         const keyInput = document.getElementById('setting-api-key');
                         if (keyInput) keyInput.value = cloudKey;
                     }
+                    const cloudHasProducts = Array.isArray(data.data.productDatabase);
+                    if (cloudHasProducts) { productDatabase = data.data.productDatabase; try { localStorage.setItem('ai_kbju_product_database', JSON.stringify(productDatabase)); } catch (e) {} }
                     const cloudHasFavs = Array.isArray(data.data.favorites);
                     if (cloudHasFavs) {
                         favorites = data.data.favorites;
@@ -369,7 +371,7 @@
                     persistState(); updateDashboardUI();
                     isApplyingCloudData = false;
                     cloudReady = true;
-                    if ((!cloudKey && (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()) || (!cloudHasFavs && favorites.length)) {
+                    if ((!cloudKey && (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()) || (!cloudHasFavs && favorites.length) || (!cloudHasProducts && productDatabase.length)) {
                         await saveCloudState(); // в облаке ключа нет, а на устройстве есть: отправляем в аккаунт
                     }
                     updateCloudAuthUI('Облачные данные загружены.');
@@ -400,7 +402,8 @@
                     profile: state.profile,
                     logs: state.logs,
                     geminiKey: (localStorage.getItem('ai_kbju_custom_api_key') || '').trim(),
-                    favorites: favorites
+                    favorites: favorites,
+                    productDatabase: productDatabase
                 },
                 updated_at: new Date().toISOString()
             };
@@ -415,7 +418,7 @@
         }
 
         function switchTab(tabName) {
-            ['dashboard', 'coach', 'settings'].forEach(t => {
+            ['dashboard', 'products', 'coach', 'settings'].forEach(t => {
                 document.getElementById(`tab-${t}`).classList.add('hidden');
                 const navBtn = document.getElementById(`nav-${t}`);
                 if (navBtn) {
@@ -448,6 +451,7 @@
                 const savedKey = localStorage.getItem('ai_kbju_custom_api_key') || '';
                 document.getElementById('setting-api-key').value = savedKey;
             }
+            if (tabName === 'products') { loadLocalProductDatabase(); renderProductDatabase(); }
             if (tabName === 'coach') {
                 document.getElementById('coach-target-display').textContent = `${state.targets.kcal} ккал`;
             }
@@ -684,6 +688,9 @@
         // ИЗБРАННЫЕ БЛЮДА (без запросов к ИИ)
         // ==========================================
         let favorites = [];
+        let productDatabase = [];
+        let productSearchResults = [];
+        let activeProductFilter = 'all';
 
         function loadFavorites() {
             try {
@@ -697,6 +704,131 @@
             scheduleCloudSync();
             renderFavorites();
         }
+
+        // ==========================================
+        // БАЗА ПРОДУКТОВ: поиск, избранное, недавние и свои продукты
+        // ==========================================
+        function loadLocalProductDatabase() {
+            try { const saved = JSON.parse(localStorage.getItem('ai_kbju_product_database') || '[]'); productDatabase = Array.isArray(saved) ? saved : []; }
+            catch (e) { productDatabase = []; }
+        }
+
+        function saveProductDatabase() {
+            try { localStorage.setItem('ai_kbju_product_database', JSON.stringify(productDatabase)); } catch (e) { showToast('Не удалось сохранить базу на устройстве', 'alert-circle'); }
+            scheduleCloudSync();
+        }
+
+        function setProductFilter(filter) {
+            activeProductFilter = filter;
+            document.querySelectorAll('[data-product-filter]').forEach(btn => btn.classList.toggle('active', btn.dataset.productFilter === filter));
+            renderProductDatabase();
+        }
+
+        function searchProductCategory(category) {
+            document.getElementById('product-search-input').value = category;
+            searchProductDatabase();
+        }
+
+        async function searchProductDatabase() {
+            const query = document.getElementById('product-search-input').value.trim();
+            if (!query) { setProductFilter('all'); return; }
+            const status = document.getElementById('product-db-status');
+            status.textContent = 'Ищем продукты…'; status.classList.remove('hidden');
+            const list = document.getElementById('product-database-list');
+            list.innerHTML = '<p class="text-xs text-zinc-400 text-center py-5">Загрузка результатов…</p>';
+            try {
+                const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=' + encodeURIComponent(query) + '&search_simple=1&action=process&json=1&page_size=30&fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments,quantity,image_front_small_url';
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                productSearchResults = (data.products || []).filter(x => x.product_name || x.product_name_ru || x.product_name_uk).map(normalizeOFFProduct);
+                activeProductFilter = 'search';
+                document.querySelectorAll('[data-product-filter]').forEach(btn => btn.classList.remove('active'));
+                status.textContent = productSearchResults.length ? `Найдено: ${productSearchResults.length}. Данные могут быть неполными — сверяй с упаковкой.` : 'Ничего не найдено. Попробуй другое название или добавь продукт вручную.';
+                renderProductDatabase();
+            } catch (error) {
+                console.error('Product search error:', error);
+                status.textContent = 'Не удалось загрузить базу. Проверь подключение к интернету.';
+                list.innerHTML = '';
+            }
+        }
+
+        function normalizeOFFProduct(product) {
+            const n = product.nutriments || {};
+            const pick = (...keys) => { for (const key of keys) { const value = Number(n[key]); if (Number.isFinite(value)) return value; } return 0; };
+            return {
+                id: 'off_' + (product.code || Math.random().toString(36).slice(2)), barcode: product.code || '',
+                name: product.product_name_ru || product.product_name_uk || product.product_name || product.brands || 'Продукт',
+                brand: product.brands || '', image: product.image_front_small_url || '',
+                kcal: pick('energy-kcal_100g', 'energy-kcal_value', 'energy-kcal'),
+                p: pick('proteins_100g', 'proteins'), f: pick('fat_100g', 'fat'), c: pick('carbohydrates_100g', 'carbohydrates'),
+                source: 'off', updatedAt: Date.now()
+            };
+        }
+
+        function renderProductDatabase() {
+            const list = document.getElementById('product-database-list');
+            if (!list) return;
+            let items = [];
+            const title = { all: 'Все продукты', recent: 'Недавние', favorite: 'Избранное', custom: 'Мои продукты', search: 'Результаты поиска' };
+            if (activeProductFilter === 'search') items = productSearchResults;
+            else if (activeProductFilter === 'recent') items = productDatabase.filter(x => x.lastUsed).sort((a,b) => b.lastUsed-a.lastUsed).slice(0,30);
+            else if (activeProductFilter === 'favorite') items = productDatabase.filter(x => x.favorite);
+            else if (activeProductFilter === 'custom') items = productDatabase.filter(x => x.source === 'custom');
+            else items = productDatabase.slice().sort((a,b) => (b.lastUsed||0)-(a.lastUsed||0));
+            document.getElementById('product-list-title').textContent = title[activeProductFilter] || 'Продукты';
+            document.getElementById('product-result-count').textContent = items.length ? `${items.length} шт.` : '';
+            if (!items.length) { list.innerHTML = `<p class="text-xs text-zinc-500 text-center py-5">${activeProductFilter === 'favorite' ? 'Пока нет избранных продуктов.' : activeProductFilter === 'recent' ? 'Добавленные продукты появятся здесь.' : activeProductFilter === 'custom' ? 'Ты ещё не добавил свои продукты.' : 'Продукты не найдены.'}</p>`; return; }
+            list.innerHTML = items.map((item, index) => `
+                <div class="product-row">
+                    <div class="min-w-0 flex-1"><p class="text-xs font-semibold text-white truncate">${escapeHtml(item.name)}</p><p class="text-[10px] text-zinc-400">${item.brand ? escapeHtml(item.brand) + ' · ' : ''}${Math.round(item.kcal||0)} ккал · Б ${Number(item.p||0).toFixed(1)} · Ж ${Number(item.f||0).toFixed(1)} · У ${Number(item.c||0).toFixed(1)} на 100 г</p></div>
+                    <button onclick="toggleProductFavorite('${escapeHtml(item.id)}')" class="product-icon-btn" title="В избранное"><i data-lucide="${item.favorite ? 'star' : 'star'}" class="w-4 h-4 ${item.favorite ? 'text-amber-400' : 'text-zinc-500'}"></i></button>
+                    <button onclick="addProductToMeal('${escapeHtml(item.id)}', '${activeProductFilter}', ${index})" class="product-add-btn" title="Добавить в приём пищи"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                </div>`).join('');
+            lucide.createIcons();
+        }
+
+        function getVisibleProduct(filter, index) { return filter === 'search' ? productSearchResults[index] : null; }
+
+        function toggleProductFavorite(id) {
+            let item = productDatabase.find(x => x.id === id);
+            if (!item) { const found = productSearchResults.find(x => x.id === id); if (found) { item = { ...found }; productDatabase.unshift(item); } }
+            if (!item) return;
+            item.favorite = !item.favorite; saveProductDatabase(); renderProductDatabase();
+        }
+
+        function addProductToMeal(id, filter, index) {
+            let item = filter === 'search' ? getVisibleProduct(filter, index) : productDatabase.find(x => x.id === id);
+            if (!item) return;
+            let saved = productDatabase.find(x => x.id === item.id);
+            if (!saved) { saved = { ...item }; productDatabase.unshift(saved); }
+            saved.lastUsed = Date.now(); saveProductDatabase();
+            currentDetectedItems = [{ name: saved.name, weight: 100, kcal: Number(saved.kcal)||0, p: Number(saved.p)||0, f: Number(saved.f)||0, c: Number(saved.c)||0 }];
+            resetModalState();
+            currentDetectedItems = [{ name: saved.name, weight: 100, kcal: Number(saved.kcal)||0, p: Number(saved.p)||0, f: Number(saved.f)||0, c: Number(saved.c)||0 }];
+            document.getElementById('modal-title').textContent = 'Добавить продукт';
+            document.getElementById('analyze-btn').classList.add('hidden');
+            document.getElementById('favorites-block').classList.add('hidden');
+            document.getElementById('mode-photo-btn').parentElement.classList.add('hidden');
+            document.getElementById('recognition-results').classList.remove('hidden');
+            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
+            if (saveButton) saveButton.textContent = 'Добавить в дневник за день';
+            renderDetectedItemsEditor();
+            document.getElementById('add-modal').classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function saveCustomProduct() {
+            const name = document.getElementById('custom-product-name').value.trim();
+            if (!name) { showToast('Введи название продукта', 'alert-circle'); return; }
+            const numbers = ['kcal','p','f','c'].map(id => Number(document.getElementById('custom-product-' + id).value));
+            if (numbers.some(n => !Number.isFinite(n) || n < 0)) { showToast('Заполни КБЖУ числами не меньше нуля', 'alert-circle'); return; }
+            const item = { id: 'custom_' + Date.now(), name, kcal: numbers[0], p: numbers[1], f: numbers[2], c: numbers[3], source: 'custom', favorite: false, createdAt: Date.now() };
+            productDatabase.unshift(item); saveProductDatabase();
+            ['name','kcal','p','f','c'].forEach(id => document.getElementById('custom-product-' + id).value = '');
+            setProductFilter('custom'); showToast('Свой продукт сохранён', 'check-circle-2');
+        }
+
 
         function renderFavorites() {
             const block = document.getElementById('favorites-block');
@@ -1650,6 +1782,7 @@ ${state.profile.notes ? `- Дополнительные пожелания: ${st
         window.onload = function() {
             initPWA();
             loadState();
+            loadLocalProductDatabase();
             initCloudAuth();
 
             document.getElementById('prev-day-btn').addEventListener('click', () => changeDate(-1));
