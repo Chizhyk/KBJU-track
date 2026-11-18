@@ -137,6 +137,7 @@
         let currentImageMimeType = 'image/jpeg';
         let currentThumbnailDataUrl = null;
         let currentDetectedItems = [];
+        let editingMealId = null;
         let lastCalculatedNorm = null;
 
         // ==========================================
@@ -612,9 +613,14 @@
                                     <span class="text-xs font-medium text-zinc-400 flex items-center gap-1">
                                         <i data-lucide="clock" class="w-3 h-3"></i> ${meal.time}
                                     </span>
-                                    <button onclick="deleteMeal('${meal.id}')" class="text-zinc-500 hover:text-red-400 p-1 rounded-lg transition" title="Удалить">
-                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                    </button>
+                                    <div class="flex items-center gap-1">
+                                        <button onclick="openEditMeal('${meal.id}')" class="text-zinc-500 hover:text-emerald-400 p-1 rounded-lg transition" title="Редактировать">
+                                            <i data-lucide="pencil" class="w-4 h-4"></i>
+                                        </button>
+                                        <button onclick="deleteMeal('${meal.id}')" class="text-zinc-500 hover:text-red-400 p-1 rounded-lg transition" title="Удалить">
+                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 <div class="flex items-baseline justify-between mt-0.5">
                                     <span class="text-base font-extrabold text-white">${Math.round(meal.totals.kcal)} ккал</span>
@@ -634,6 +640,32 @@
                 `;
             }).join('');
 
+            lucide.createIcons();
+        }
+
+        function openEditMeal(mealId) {
+            const meals = state.logs[state.selectedDate] || [];
+            const meal = meals.find(item => item.id === mealId);
+            if (!meal) return;
+
+            resetModalState();
+            editingMealId = mealId;
+            currentDetectedItems = JSON.parse(JSON.stringify(meal.items || []));
+            currentThumbnailDataUrl = meal.thumbnail || null;
+            document.getElementById('food-note-input').value = meal.note || '';
+            setModalMode('text');
+
+            // В режиме редактирования оставляем только список продуктов и сохранение.
+            document.getElementById('modal-title').textContent = 'Редактировать приём пищи';
+            document.getElementById('analyze-btn').classList.add('hidden');
+            document.getElementById('favorites-block').classList.add('hidden');
+            document.getElementById('mode-photo-btn').parentElement.classList.add('hidden');
+            document.getElementById('recognition-results').classList.remove('hidden');
+            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
+            if (saveButton) saveButton.textContent = 'Сохранить изменения';
+
+            renderDetectedItemsEditor();
+            document.getElementById('add-modal').classList.remove('hidden');
             lucide.createIcons();
         }
 
@@ -726,16 +758,25 @@
         function openAddModal(mode = 'photo') {
             resetModalState();
             setModalMode(mode);
+            document.getElementById('modal-title').textContent = 'Добавить приём пищи';
+            document.getElementById('analyze-btn').classList.remove('hidden');
+            document.getElementById('favorites-block').classList.remove('hidden');
+            document.getElementById('mode-photo-btn').parentElement.classList.remove('hidden');
+            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
+            if (saveButton) saveButton.textContent = 'Добавить в дневник за день';
             renderFavorites();
             document.getElementById('add-modal').classList.remove('hidden');
             lucide.createIcons();
         }
 
         function closeAddModal() {
+            stopBarcodeScanner();
             document.getElementById('add-modal').classList.add('hidden');
+            editingMealId = null;
         }
 
         function resetModalState() {
+            editingMealId = null;
             currentBase64Image = null;
             currentThumbnailDataUrl = null;
             currentDetectedItems = [];
@@ -1014,6 +1055,142 @@
         }
 
         // ==========================================
+        // СКАНЕР ШТРИХКОДОВ И БАЗА OPEN FOOD FACTS
+        // ==========================================
+        let barcodeStream = null;
+        let barcodeDetector = null;
+        let barcodeScanFrame = null;
+        let barcodeZXingControls = null;
+        let barcodeLookupBusy = false;
+
+        function setBarcodeStatus(message, isError = false) {
+            const el = document.getElementById('barcode-status');
+            if (!el) return;
+            el.textContent = message;
+            el.classList.remove('hidden', 'text-red-400', 'text-zinc-400', 'text-emerald-400');
+            el.classList.add(isError ? 'text-red-400' : 'text-zinc-400');
+        }
+
+        async function startBarcodeScanner() {
+            const panel = document.getElementById('barcode-camera-panel');
+            const video = document.getElementById('barcode-video');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setBarcodeStatus('Камера недоступна. Открой приложение по HTTPS или введи штрихкод вручную.', true);
+                return;
+            }
+            try {
+                panel.classList.remove('hidden');
+                if (!('BarcodeDetector' in window)) {
+                    if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserMultiFormatReader) {
+                        panel.classList.add('hidden');
+                        setBarcodeStatus('Сканер не загрузился. Введи цифры штрихкода вручную.', true);
+                        return;
+                    }
+                    const reader = new ZXingBrowser.BrowserMultiFormatReader();
+                    setBarcodeStatus('Запрашиваем доступ к камере…');
+                    barcodeZXingControls = await reader.decodeFromVideoDevice(undefined, video, (result, error, controls) => {
+                        if (controls) barcodeZXingControls = controls;
+                        if (result && result.getText()) {
+                            const code = result.getText();
+                            document.getElementById('barcode-manual-input').value = code;
+                            stopBarcodeScanner();
+                            lookupBarcodeProduct(code);
+                        }
+                    });
+                    setBarcodeStatus('Камера включена. Наведи её на штрихкод.');
+                    return;
+                }
+                const supported = await BarcodeDetector.getSupportedFormats();
+                const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'].filter(x => supported.includes(x));
+                if (!formats.length) throw new Error('Браузер не поддерживает подходящие форматы штрихкодов.');
+                barcodeDetector = new BarcodeDetector({ formats });
+                barcodeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+                video.srcObject = barcodeStream;
+                panel.classList.remove('hidden');
+                await video.play();
+                setBarcodeStatus('Камера включена. Наведи её на штрихкод.');
+                scanBarcodeFrame();
+            } catch (error) {
+                stopBarcodeScanner();
+                setBarcodeStatus(error.name === 'NotAllowedError' ? 'Нет доступа к камере. Разреши доступ в настройках браузера.' : (error.message || 'Не удалось запустить камеру.'), true);
+            }
+        }
+
+        async function scanBarcodeFrame() {
+            const video = document.getElementById('barcode-video');
+            if (!barcodeDetector || !video || video.readyState < 2 || barcodeLookupBusy) {
+                barcodeScanFrame = requestAnimationFrame(scanBarcodeFrame);
+                return;
+            }
+            try {
+                const codes = await barcodeDetector.detect(video);
+                if (codes.length && codes[0].rawValue) {
+                    document.getElementById('barcode-manual-input').value = codes[0].rawValue;
+                    stopBarcodeScanner();
+                    await lookupBarcodeProduct(codes[0].rawValue);
+                    return;
+                }
+            } catch (error) { /* продолжаем сканирование следующего кадра */ }
+            barcodeScanFrame = requestAnimationFrame(scanBarcodeFrame);
+        }
+
+        function stopBarcodeScanner() {
+            if (barcodeScanFrame) cancelAnimationFrame(barcodeScanFrame);
+            barcodeScanFrame = null;
+            if (barcodeZXingControls) {
+                try { barcodeZXingControls.stop(); } catch (error) { /* камера уже остановлена */ }
+            }
+            barcodeZXingControls = null;
+            if (barcodeStream) barcodeStream.getTracks().forEach(track => track.stop());
+            barcodeStream = null;
+            barcodeDetector = null;
+            const video = document.getElementById('barcode-video');
+            if (video) { video.pause(); video.srcObject = null; }
+            const panel = document.getElementById('barcode-camera-panel');
+            if (panel) panel.classList.add('hidden');
+        }
+
+        async function lookupBarcodeProduct(value) {
+            const input = document.getElementById('barcode-manual-input');
+            const barcode = String(value || input.value || '').replace(/\s/g, '');
+            if (!/^\d{8,14}$/.test(barcode)) {
+                setBarcodeStatus('Введи корректный штрихкод: обычно это 8–14 цифр.', true);
+                return;
+            }
+            if (barcodeLookupBusy) return;
+            barcodeLookupBusy = true;
+            setBarcodeStatus('Ищем продукт в Open Food Facts…');
+            try {
+                const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments,quantity`);
+                if (!response.ok) throw new Error('База продуктов временно недоступна. Попробуй ещё раз.');
+                const data = await response.json();
+                if (data.status !== 1 || !data.product) throw new Error('Продукт не найден. Можно добавить его вручную или попробовать другой штрихкод.');
+                const product = data.product;
+                const n = product.nutriments || {};
+                const kcal = Number(n['energy-kcal_100g'] ?? n['energy-kcal_value'] ?? (Number(n['energy_100g']) / 4.184));
+                const protein = Number(n.proteins_100g);
+                const fat = Number(n.fat_100g);
+                const carbs = Number(n.carbohydrates_100g);
+                if (![kcal, protein, fat, carbs].every(Number.isFinite)) throw new Error('У продукта нет полного набора данных КБЖУ в базе.');
+                const name = product.product_name_ru || product.product_name_uk || product.product_name || product.brands || `Продукт ${barcode}`;
+                currentDetectedItems.push({
+                    name: String(name).trim(), weight: 100,
+                    kcal: Math.round(kcal), p: Math.round(protein * 10) / 10,
+                    f: Math.round(fat * 10) / 10, c: Math.round(carbs * 10) / 10
+                });
+                renderDetectedItemsEditor();
+                document.getElementById('recognition-results').classList.remove('hidden');
+                document.getElementById('recognition-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setBarcodeStatus(`Добавлено: ${name}. Значения указаны на 100 г — проверь их по упаковке.`);
+                input.value = '';
+            } catch (error) {
+                setBarcodeStatus(error.message || 'Не удалось найти продукт.', true);
+            } finally {
+                barcodeLookupBusy = false;
+            }
+        }
+
+        // ==========================================
         // 7. РЕДАКТОР РАСПОЗНАННЫХ ПРОДУКТОВ И СОХРАНЕНИЕ
         // ==========================================
         function renderDetectedItemsEditor() {
@@ -1132,23 +1309,41 @@
             const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
             const noteText = document.getElementById('food-note-input').value.trim();
 
+            const totals = {
+                kcal: Math.round(kcal),
+                p: Math.round(p * 10) / 10,
+                f: Math.round(f * 10) / 10,
+                c: Math.round(c * 10) / 10
+            };
+
+            if (!state.logs[state.selectedDate]) state.logs[state.selectedDate] = [];
+
+            if (editingMealId) {
+                const existingMeal = state.logs[state.selectedDate].find(meal => meal.id === editingMealId);
+                if (!existingMeal) {
+                    showToast('Запись не найдена. Возможно, она уже удалена.', 'alert-circle');
+                    closeAddModal();
+                    return;
+                }
+                existingMeal.note = noteText;
+                existingMeal.items = currentDetectedItems.map(item => ({ ...item }));
+                existingMeal.totals = totals;
+                if (currentThumbnailDataUrl) existingMeal.thumbnail = currentThumbnailDataUrl;
+                persistState();
+                updateDashboardUI();
+                closeAddModal();
+                showToast('Изменения сохранены', 'check-circle-2');
+                return;
+            }
+
             const newMeal = {
                 id: 'meal_' + Date.now(),
                 time: timeStr,
                 thumbnail: currentThumbnailDataUrl,
                 note: noteText,
-                items: currentDetectedItems,
-                totals: {
-                    kcal: Math.round(kcal),
-                    p: Math.round(p * 10) / 10,
-                    f: Math.round(f * 10) / 10,
-                    c: Math.round(c * 10) / 10
-                }
+                items: currentDetectedItems.map(item => ({ ...item })),
+                totals
             };
-
-            if (!state.logs[state.selectedDate]) {
-                state.logs[state.selectedDate] = [];
-            }
             state.logs[state.selectedDate].push(newMeal);
 
             persistState();

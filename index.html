@@ -20,6 +20,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Supabase: Google login and cloud database -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- ZXing: резервный сканер для браузеров без BarcodeDetector -->
+    <script src="https://unpkg.com/@zxing/browser@0.2.1"></script>
     
     
     <link rel="stylesheet" href="css/styles.css?v=4">
@@ -636,6 +638,35 @@
                         <button id="mode-text-btn" onclick="setModalMode('text')" class="py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5">
                             <i data-lucide="type" class="w-4 h-4 text-amber-400"></i> Только текстом
                         </button>
+                    </div>
+
+                    <!-- Сканирование штрихкода продукта -->
+                    <div class="bg-dark-800/60 border border-zinc-700/70 rounded-2xl p-3 space-y-2.5">
+                        <div class="flex items-center gap-2">
+                            <div class="w-9 h-9 rounded-xl bg-sky-500/15 text-sky-400 flex items-center justify-center">
+                                <i data-lucide="scan-barcode" class="w-5 h-5"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-sm font-bold text-white">Сканировать штрихкод</p>
+                                <p class="text-[11px] text-zinc-400">Найти продукт и его КБЖУ в базе</p>
+                            </div>
+                            <button type="button" onclick="startBarcodeScanner()" class="bg-sky-500/15 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                                <i data-lucide="camera" class="w-4 h-4"></i> Камера
+                            </button>
+                        </div>
+                        <div class="flex gap-2">
+                            <input id="barcode-manual-input" type="text" inputmode="numeric" autocomplete="off" onkeydown="if(event.key==='Enter') lookupBarcodeProduct()" placeholder="Или введи цифры штрихкода" class="min-w-0 flex-1 bg-dark-900 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-sky-400">
+                            <button type="button" onclick="lookupBarcodeProduct()" class="bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold px-3 rounded-xl text-xs">Найти</button>
+                        </div>
+                        <p id="barcode-status" class="hidden text-xs text-zinc-400" role="status" aria-live="polite"></p>
+                        <p class="text-[10px] text-zinc-500">База Open Food Facts. Данные могут быть неполными — сверяй их с этикеткой продукта.</p>
+                        <div id="barcode-camera-panel" class="hidden space-y-2">
+                            <video id="barcode-video" class="w-full max-h-56 rounded-xl bg-black object-cover" playsinline muted></video>
+                            <div class="flex items-center justify-between gap-2">
+                                <p class="text-[11px] text-zinc-400">Наведи камеру на штрихкод</p>
+                                <button type="button" onclick="stopBarcodeScanner()" class="text-xs text-red-400 px-3 py-1.5 rounded-lg bg-red-500/15">Остановить</button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Блок загрузки фото -->
