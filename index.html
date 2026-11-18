@@ -1550,8 +1550,11 @@
         async function fetchWithBackoff(url, options, maxRetries = 4) {
             let delay = 1000;
             for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 45000);
                 try {
-                    const response = await fetch(url, options);
+                    const response = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(timer);
                     if (response.ok) {
                         return await response.json();
                     }
@@ -1566,6 +1569,8 @@
                     fatalErr.fatal = true;
                     throw fatalErr;
                 } catch (err) {
+                    clearTimeout(timer);
+                    if (err.name === 'AbortError') { const te = new Error('Timeout: Gemini не ответил за 45 секунд'); te.fatal = true; throw te; }
                     if (err.fatal || attempt === maxRetries) throw err;
                     await new Promise(res => setTimeout(res, delay));
                     delay *= 2;
@@ -1582,7 +1587,8 @@
             }
             const code = (raw.match(/\((\d{3})\)/) || raw.match(/HTTP (\d{3})/) || [])[1];
             let reason;
-            if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) reason = 'Нет связи с Gemini (интернет, VPN или блокировщик рекламы).';
+            if (/Timeout/i.test(raw)) reason = 'Gemini слишком долго отвечает. Попробуй ещё раз.';
+            else if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) reason = 'Нет связи с Gemini (интернет, VPN или блокировщик рекламы).';
             else if (code === '429') reason = 'Закончился лимит Gemini. Подожди минуту или попробуй позже.';
             else if (/API key not valid|API_KEY_INVALID|expired/i.test(raw)) reason = 'Gemini не принял ключ. Проверь API ключ в Настройках.';
             else if (code === '404') reason = 'Модель Gemini недоступна (' + GEMINI_MODEL + ').';
@@ -1645,6 +1651,7 @@
                     contents: [{ role: "user", parts }],
                     systemInstruction: { parts: [{ text: systemPrompt }] },
                     generationConfig: {
+                        thinkingConfig: { thinkingLevel: "low" },
                         responseMimeType: "application/json",
                         responseSchema: {
                             type: "OBJECT",
@@ -1923,7 +1930,8 @@ ${customQuery ? `ДОПОЛНИТЕЛЬНЫЙ ВОПРОС ПОЛЬЗОВАТЕ�
 3. 2–3 конкретных примера блюд/перекусов с примерной граммовкой, которые идеально закроют остаток КБЖУ.`;
 
                 const payload = {
-                    contents: [{ role: "user", parts: [{ text: prompt }] }]
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                    generationConfig: { thinkingConfig: { thinkingLevel: "low" } }
                 };
 
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${getActiveApiKey()}`;
@@ -2024,6 +2032,7 @@ ${state.profile.notes ? `- Дополнительные пожелания: ${st
                     contents: [{ role: "user", parts: [{ text: userPrompt }] }],
                     systemInstruction: { parts: [{ text: systemPrompt }] },
                     generationConfig: {
+                        thinkingConfig: { thinkingLevel: "low" },
                         responseMimeType: "application/json",
                         responseSchema: {
                             type: "OBJECT",
