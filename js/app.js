@@ -1,1795 +1,827 @@
-// KBJU Track build v8
-const APP_BUILD_VERSION = "6";
-        // ==========================================
-        // 1. КОНФИГУРАЦИЯ И СОСТОЯНИЕ ПРИЛОЖЕНИЯ
-        // ==========================================
-        const defaultApiKey = ""; // Ключ подставляется средой выполнения автоматически или берётся из настроек профиля
-        const GEMINI_MODEL = "gemini-3.5-flash-lite"; // основная (быстрая)
-        const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash"]; // по порядку: если первая не ответила, пробуем следующую
-        // Вставь сюда URL и anon/public key своего проекта Supabase (не service_role key!).
-        const SUPABASE_URL = "https://yyehwrqhecqcejfdgafy.supabase.co";
-        const SUPABASE_ANON_KEY = "sb_publishable_SwA5oaF3hSMHsF3xr6AwXA_VZNbG9Up";
-        let supabaseClient = null;
-        let cloudUser = null;
-        let cloudSyncTimer = null;
-        let isApplyingCloudData = false;
-        let cloudReady = false; // true только после успешной загрузки облачных данных (защита от перезаписи)
-        let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-        let deferredInstallPrompt = null;
-
-        function getActiveApiKey() {
-            const customKey = localStorage.getItem('ai_kbju_custom_api_key');
-            return (customKey && customKey.trim().length > 0) ? customKey.trim() : defaultApiKey;
-        }
-
-        // ==========================================
-        // 1.1 ИНИЦИАЛИЗАЦИЯ PWA (MANIFEST + SERVICE WORKER В ОДНОМ ФАЙЛЕ)
-        // ==========================================
-        function initPWA() {
-            try {
-                // Генерируем иконку приложения программно через Canvas в PNG (совместимо с Android Chrome и iOS Safari)
-                const iconCanvas = document.createElement('canvas');
-                iconCanvas.width = 512;
-                iconCanvas.height = 512;
-                const ctx = iconCanvas.getContext('2d');
-
-                // Градиентный фон иконки
-                const grad = ctx.createLinearGradient(0, 0, 512, 512);
-                grad.addColorStop(0, '#10b981');
-                grad.addColorStop(1, '#84cc16');
-                ctx.fillStyle = grad;
-                ctx.beginPath();
-                ctx.roundRect(0, 0, 512, 512, 112);
-                ctx.fill();
-
-                // Символ пламени / калорий в центре
-                ctx.fillStyle = '#09090b';
-                ctx.font = 'bold 210px Inter, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('🔥', 256, 225);
-
-                ctx.font = '800 64px Inter, sans-serif';
-                ctx.fillText('КБЖУ', 256, 395);
-
-                const iconDataUrl = localStorage.getItem('ai_kbju_app_icon') || iconCanvas.toDataURL('image/png');
-                applyPwaIcon(iconDataUrl);
-
-                // Регистрация лёгкого Service Worker для соответствия критериям PWA (если поддерживается протоколом)
-                if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost')) {
-                    const swCode = `
-                        self.addEventListener('install', (e) => self.skipWaiting());
-                        self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
-                        self.addEventListener('fetch', (e) => {
-                            e.respondWith(fetch(e.request).catch(() => new Response('Offline')));
-                        });
-                    `;
-                    const swBlob = new Blob([swCode], { type: 'application/javascript' });
-                    const swUrl = URL.createObjectURL(swBlob);
-                    navigator.serviceWorker.register(swUrl).catch(() => {});
-                }
-            } catch (err) {
-                console.warn("PWA init info:", err);
-            }
-        }
-
-        // Перехват системного события установки PWA на Android / Chrome
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredInstallPrompt = e;
-            const nativeBox = document.getElementById('native-install-box');
-            if (nativeBox) nativeBox.classList.remove('hidden');
-        });
-
-        window.addEventListener('appinstalled', () => {
-            deferredInstallPrompt = null;
-            closeInstallModal();
-            showToast("Приложение успешно установлено на телефон!", "check-circle-2");
-        });
-
-        function triggerPwaInstall() {
-            const modal = document.getElementById('install-modal');
-            const nativeBox = document.getElementById('native-install-box');
-            if (deferredInstallPrompt && nativeBox) {
-                nativeBox.classList.remove('hidden');
-            }
-            modal.classList.remove('hidden');
-            lucide.createIcons();
-        }
-
-        function closeInstallModal() {
-            document.getElementById('install-modal').classList.add('hidden');
-        }
-
-        async function executeNativeInstall() {
-            if (!deferredInstallPrompt) return;
-            deferredInstallPrompt.prompt();
-            const { outcome } = await deferredInstallPrompt.userChoice;
-            if (outcome === 'accepted') {
-                deferredInstallPrompt = null;
-                closeInstallModal();
-            }
-        }
-
-        // Состояние по умолчанию
-        let state = {
-            selectedDate: getTodayDateString(),
-            targets: {
-                kcal: 3400,
-                p: 180,
-                f: 95,
-                c: 455
-            },
-            profile: {
-                gender: 'male',
-                age: 25,
-                weight: 75,
-                height: 180,
-                activity: 'moderate',
-                goal: 'bulk',
-                notes: ''
-            },
-            // Структура logs: { "2026-11-18": [ { id, timestamp, thumbnail, note, items: [...], totals: {...} } ] }
-            logs: {}
-        };
-
-        // Временные данные в модальном окне распознавания
-        let currentModalMode = 'photo';
-        let currentBase64Image = null;
-        let currentImageMimeType = 'image/jpeg';
-        let currentThumbnailDataUrl = null;
-        let currentDetectedItems = [];
-        let editingMealId = null;
-        let lastCalculatedNorm = null;
-
-        // ==========================================
-        // 2. ИНИЦИАЛИЗАЦИЯ И ХРАНИЛИЩЕ (LOCALSTORAGE)
-        // ==========================================
-        function applyPwaIcon(iconDataUrl) {
-            const appleIconEl = document.getElementById('apple-touch-icon');
-            if (appleIconEl) appleIconEl.href = iconDataUrl;
-            const manifestObj = {
-                name: "AI КБЖУ Трекер", short_name: "AI КБЖУ",
-                description: "Умный дневник питания с распознаванием еды по фото",
-                start_url: window.location.href.split('#')[0], display: "standalone",
-                orientation: "portrait", background_color: "#09090b", theme_color: "#09090b",
-                icons: [{ src: iconDataUrl, sizes: "512x512", type: "image/png", purpose: "any maskable" }]
-            };
-            const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
-            const manifestUrl = URL.createObjectURL(manifestBlob);
-            const manifestEl = document.getElementById('pwa-manifest');
-            if (manifestEl) manifestEl.href = manifestUrl;
-            const preview = document.getElementById('app-icon-preview');
-            if (preview) preview.src = iconDataUrl;
-        }
-
-        function handleAppIconSelect(event) {
-            const file = event.target.files && event.target.files[0];
-            if (!file) return;
-            if (!file.type.startsWith('image/')) { showToast('Выбери файл изображения', 'alert-circle'); return; }
-            const reader = new FileReader();
-            reader.onload = () => {
-                const img = new Image();
-                img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = 512; canvas.height = 512;
-                    const ctx = canvas.getContext('2d');
-                    const side = Math.min(img.width, img.height);
-                    const sx = (img.width - side) / 2, sy = (img.height - side) / 2;
-                    ctx.drawImage(img, sx, sy, side, side, 0, 0, 512, 512);
-                    const data = canvas.toDataURL('image/png');
-                    try {
-                        localStorage.setItem('ai_kbju_app_icon', data);
-                        applyPwaIcon(data);
-                        showToast('Иконка приложения обновлена', 'check-circle-2');
-                    } catch (err) { showToast('Не удалось сохранить иконку: файл слишком большой', 'alert-circle'); }
-                };
-                img.onerror = () => showToast('Не удалось открыть изображение', 'alert-circle');
-                img.src = reader.result;
-            };
-            reader.readAsDataURL(file);
-            event.target.value = '';
-        }
-
-        function resetAppIcon() {
-            localStorage.removeItem('ai_kbju_app_icon');
-            const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
-            const ctx = canvas.getContext('2d');
-            const grad = ctx.createLinearGradient(0, 0, 512, 512);
-            grad.addColorStop(0, '#10b981'); grad.addColorStop(1, '#84cc16');
-            ctx.fillStyle = grad; ctx.beginPath(); ctx.roundRect(0, 0, 512, 512, 112); ctx.fill();
-            ctx.fillStyle = '#09090b'; ctx.font = 'bold 210px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText('🔥', 256, 225); ctx.font = '800 64px Inter, sans-serif'; ctx.fillText('КБЖУ', 256, 395);
-            applyPwaIcon(canvas.toDataURL('image/png'));
-            showToast('Стандартная иконка восстановлена', 'check-circle-2');
-        }
-
-        function openCalendar() {
-            const [y, m] = state.selectedDate.split('-').map(Number);
-            calendarMonth = new Date(y, m - 1, 1);
-            renderCalendar();
-            document.getElementById('calendar-modal').classList.remove('hidden');
-            lucide.createIcons();
-        }
-        function closeCalendar() { document.getElementById('calendar-modal').classList.add('hidden'); }
-        function changeCalendarMonth(delta) {
-            calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + delta, 1);
-            renderCalendar();
-        }
-        function goToCalendarToday() {
-            state.selectedDate = getTodayDateString();
-            closeCalendar(); updateDashboardUI();
-        }
-        function renderCalendar() {
-            const year = calendarMonth.getFullYear(), month = calendarMonth.getMonth();
-            const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
-            document.getElementById('calendar-month-label').textContent = `${monthNames[month]} ${year}`;
-            const grid = document.getElementById('calendar-grid');
-            const weekdays = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
-            let html = weekdays.map(d => `<div class="text-[10px] font-semibold text-zinc-500 py-1">${d}</div>`).join('');
-            const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7;
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-            for (let i=0; i<firstOffset; i++) html += '<div class="h-10"></div>';
-            const today = getTodayDateString();
-            for (let day=1; day<=daysInMonth; day++) {
-                const date = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-                const hasEntries = Array.isArray(state.logs[date]) && state.logs[date].length > 0;
-                const isSelected = date === state.selectedDate;
-                const isFuture = date > today;
-                const color = isSelected ? 'bg-sky-500 text-white border-sky-400' : hasEntries ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-dark-800 text-zinc-300 border-zinc-800';
-                const marker = isFuture ? '' : `<span class="w-1.5 h-1.5 rounded-full ${hasEntries ? 'bg-emerald-400' : 'bg-zinc-600'}"></span>`;
-                html += `<button type="button" onclick="selectCalendarDate('${date}')" class="h-10 rounded-xl border ${color} flex flex-col items-center justify-center gap-0.5 text-xs font-semibold hover:border-sky-400 transition">${day}${marker}</button>`;
-            }
-            grid.innerHTML = html;
-            const selectedMeals = state.logs[state.selectedDate] || [];
-            const status = selectedMeals.length ? `Записано приёмов пищи: ${selectedMeals.length}` : (state.selectedDate <= today ? 'В этот день записей пока нет' : 'Это будущая дата');
-            document.getElementById('calendar-selected-info').textContent = `${formatHumanDate(state.selectedDate)} · ${state.selectedDate} — ${status}`;
-            lucide.createIcons();
-        }
-        function selectCalendarDate(date) {
-            state.selectedDate = date;
-            closeCalendar(); updateDashboardUI();
-        }
-
-        function getTodayDateString() {
-            const now = new Date();
-            const offset = now.getTimezoneOffset() * 60000;
-            return new Date(now - offset).toISOString().split('T')[0];
-        }
-
-        function loadState() {
-            try {
-                const savedTargets = localStorage.getItem('ai_kbju_targets');
-                const savedProfile = localStorage.getItem('ai_kbju_profile');
-                const savedLogs = localStorage.getItem('ai_kbju_logs');
-                if (savedTargets) state.targets = JSON.parse(savedTargets);
-                if (savedProfile) state.profile = { ...state.profile, ...JSON.parse(savedProfile) };
-                if (savedLogs) state.logs = JSON.parse(savedLogs);
-                loadFavorites();
-            } catch (e) {
-                console.error("Ошибка загрузки из localStorage:", e);
-            }
-        }
-
-        function persistState() {
-            try {
-                localStorage.setItem('ai_kbju_targets', JSON.stringify(state.targets));
-                localStorage.setItem('ai_kbju_profile', JSON.stringify(state.profile));
-                localStorage.setItem('ai_kbju_logs', JSON.stringify(state.logs));
-                scheduleCloudSync();
-            } catch (e) {
-                // Если хранилище переполнено из-за картинок, сохраняем без миниатюр старых записей
-                console.warn("Переполнение localStorage, очищаем старые превью...");
-                Object.keys(state.logs).forEach(date => {
-                    if (date !== state.selectedDate) {
-                        state.logs[date].forEach(meal => meal.thumbnail = null);
-                    }
-                });
-                try {
-                    localStorage.setItem('ai_kbju_logs', JSON.stringify(state.logs));
-                    scheduleCloudSync();
-                } catch (err) {
-                    showToast("Память браузера заполнена, удалите старые записи", "alert-circle");
-                }
-            }
-        }
-
-        // ==========================================
-        // 3. НАВИГАЦИЯ И ПЕРЕКЛЮЧЕНИЕ ДАТ
-        // ==========================================
-        function updateCloudAuthUI(message) {
-            const status = document.getElementById('cloud-auth-status');
-            const signIn = document.getElementById('google-signin-btn');
-            const signOut = document.getElementById('google-signout-btn');
-            if (!status || !signIn || !signOut) return;
-            if (message) status.textContent = message;
-            if (cloudUser) {
-                status.textContent = `Подключено: ${cloudUser.email || 'Google аккаунт'}. Данные синхронизируются.`;
-                signIn.classList.add('hidden'); signOut.classList.remove('hidden');
-            } else {
-                signIn.classList.remove('hidden'); signOut.classList.add('hidden');
-            }
-        }
-
-        async function initCloudAuth() {
-            if (!window.supabase || SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
-                updateCloudAuthUI('Облако ещё не настроено. Добавь URL и anon key проекта Supabase в начале index.html.');
-                return;
-            }
-            try {
-                supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                const { data: { session } } = await supabaseClient.auth.getSession();
-                if (session?.user) { cloudUser = session.user; updateCloudAuthUI(); await loadCloudState(); }
-                supabaseClient.auth.onAuthStateChange(async (_event, session) => {
-                    cloudUser = session?.user || null;
-                    updateCloudAuthUI();
-                    if (cloudUser) await loadCloudState();
-                });
-            } catch (err) {
-                console.error('Supabase init error:', err);
-                updateCloudAuthUI('Не удалось подключить облако. Проверь настройки Supabase.');
-            }
-        }
-
-        async function signInWithGoogle() {
-            if (!supabaseClient) { showToast('Сначала настрой Supabase в коде', 'alert-circle'); return; }
-            const { error } = await supabaseClient.auth.signInWithOAuth({
-                provider: 'google',
-                options: { redirectTo: window.location.origin + window.location.pathname }
-            });
-            if (error) showToast(`Ошибка входа: ${error.message}`, 'alert-circle');
-        }
-
-        async function signOutFromCloud() {
-            if (!supabaseClient) return;
-            const { error } = await supabaseClient.auth.signOut();
-            if (error) showToast(`Ошибка выхода: ${error.message}`, 'alert-circle');
-            else { cloudUser = null; cloudReady = false; updateCloudAuthUI('Вышел из облачного аккаунта. Локальные данные остались на устройстве.'); }
-        }
-
-        async function loadCloudState() {
-            if (!supabaseClient || !cloudUser) return;
-            try {
-                const { data, error } = await supabaseClient.from('kbju_user_data').select('data').eq('user_id', cloudUser.id).maybeSingle();
-                if (error) throw error;
-                if (data?.data) {
-                    isApplyingCloudData = true;
-                    state.targets = data.data.targets || state.targets;
-                    state.profile = { ...state.profile, ...(data.data.profile || {}) };
-                    state.logs = data.data.logs || state.logs;
-                    const cloudKey = (data.data.geminiKey || '').trim();
-                    if (cloudKey) {
-                        localStorage.setItem('ai_kbju_custom_api_key', cloudKey);
-                        const keyInput = document.getElementById('setting-api-key');
-                        if (keyInput) keyInput.value = cloudKey;
-                    }
-                    const cloudHasProducts = Array.isArray(data.data.productDatabase);
-                    if (cloudHasProducts) { productDatabase = data.data.productDatabase; try { localStorage.setItem('ai_kbju_product_database', JSON.stringify(productDatabase)); } catch (e) {} }
-                    const cloudHasFavs = Array.isArray(data.data.favorites);
-                    if (cloudHasFavs) {
-                        favorites = data.data.favorites;
-                        try { localStorage.setItem('ai_kbju_favorites', JSON.stringify(favorites)); } catch (e) {}
-                    }
-                    persistState(); updateDashboardUI();
-                    isApplyingCloudData = false;
-                    cloudReady = true;
-                    if ((!cloudKey && (localStorage.getItem('ai_kbju_custom_api_key') || '').trim()) || (!cloudHasFavs && favorites.length) || (!cloudHasProducts && productDatabase.length)) {
-                        await saveCloudState(); // в облаке ключа нет, а на устройстве есть: отправляем в аккаунт
-                    }
-                    updateCloudAuthUI('Облачные данные загружены.');
-                } else {
-                    cloudReady = true;
-                    await saveCloudState();
-                }
-            } catch (err) {
-                isApplyingCloudData = false;
-                cloudReady = false;
-                console.error('Cloud load error:', err);
-                updateCloudAuthUI('Не удалось загрузить данные. Проверь SQL-политику таблицы Supabase.');
-            }
-        }
-
-        function scheduleCloudSync() {
-            if (!supabaseClient || !cloudUser || isApplyingCloudData) return;
-            clearTimeout(cloudSyncTimer);
-            cloudSyncTimer = setTimeout(saveCloudState, 900);
-        }
-
-        async function saveCloudState() {
-            if (!supabaseClient || !cloudUser || isApplyingCloudData || !cloudReady) return;
-            const payload = {
-                user_id: cloudUser.id,
-                data: {
-                    targets: state.targets,
-                    profile: state.profile,
-                    logs: state.logs,
-                    geminiKey: (localStorage.getItem('ai_kbju_custom_api_key') || '').trim(),
-                    favorites: favorites,
-                    productDatabase: productDatabase
-                },
-                updated_at: new Date().toISOString()
-            };
-            try {
-                const { error } = await supabaseClient.from('kbju_user_data').upsert(payload, { onConflict: 'user_id' });
-                if (error) throw error;
-                updateCloudAuthUI('Все изменения сохранены в облаке.');
-            } catch (err) {
-                console.error('Cloud save error:', err);
-                updateCloudAuthUI('Ошибка облачного сохранения. Локальная копия сохранена на устройстве.');
-            }
-        }
-
-        function switchTab(tabName) {
-            ['dashboard', 'products', 'coach', 'settings'].forEach(t => {
-                document.getElementById(`tab-${t}`).classList.add('hidden');
-                const navBtn = document.getElementById(`nav-${t}`);
-                if (navBtn) {
-                    navBtn.classList.remove('text-emerald-400');
-                    navBtn.classList.add('text-zinc-400');
-                }
-            });
-
-            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
-            const activeNav = document.getElementById(`nav-${tabName}`);
-            if (activeNav) {
-                activeNav.classList.remove('text-zinc-400');
-                activeNav.classList.add('text-emerald-400');
-            }
-
-            if (tabName === 'settings') {
-                document.getElementById('setting-kcal').value = state.targets.kcal;
-                document.getElementById('setting-p').value = state.targets.p;
-                document.getElementById('setting-f').value = state.targets.f;
-                document.getElementById('setting-c').value = state.targets.c;
-
-                selectGender(state.profile.gender || 'male');
-                document.getElementById('profile-age').value = state.profile.age || 25;
-                document.getElementById('profile-weight').value = state.profile.weight || 75;
-                document.getElementById('profile-height').value = state.profile.height || 180;
-                document.getElementById('profile-activity').value = state.profile.activity || 'moderate';
-                document.getElementById('profile-goal').value = state.profile.goal || 'bulk';
-                document.getElementById('profile-notes').value = state.profile.notes || '';
-
-                const savedKey = localStorage.getItem('ai_kbju_custom_api_key') || '';
-                document.getElementById('setting-api-key').value = savedKey;
-            }
-            if (tabName === 'products') { loadLocalProductDatabase(); renderProductDatabase(); }
-            if (tabName === 'coach') {
-                document.getElementById('coach-target-display').textContent = `${state.targets.kcal} ккал`;
-            }
-            lucide.createIcons();
-        }
-
-        function saveApiKeySetting() {
-            const val = document.getElementById('setting-api-key').value.trim();
-            if (val) {
-                localStorage.setItem('ai_kbju_custom_api_key', val);
-                if (cloudUser && cloudReady) {
-                    scheduleCloudSync();
-                    showToast("Ключ сохранён на устройстве и в твоём аккаунте!", "check-circle-2");
-                } else {
-                    showToast("Ключ сохранён на этом устройстве. Войди через Google, чтобы он был на всех устройствах.", "check-circle-2");
-                }
-            } else {
-                localStorage.removeItem('ai_kbju_custom_api_key');
-                if (cloudUser && cloudReady) scheduleCloudSync();
-                showToast("API ключ очищен", "info");
-            }
-        }
-
-        function toggleApiKeyVisibility() {
-            const input = document.getElementById('setting-api-key');
-            const icon = document.getElementById('api-key-eye-icon');
-            if (input.type === 'password') {
-                input.type = 'text';
-                icon.setAttribute('data-lucide', 'eye-off');
-            } else {
-                input.type = 'password';
-                icon.setAttribute('data-lucide', 'eye');
-            }
-            lucide.createIcons();
-        }
-
-        function changeDate(offsetDays) {
-            const parts = state.selectedDate.split('-');
-            const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
-            dateObj.setDate(dateObj.getDate() + offsetDays);
-            const offset = dateObj.getTimezoneOffset() * 60000;
-            state.selectedDate = new Date(dateObj - offset).toISOString().split('T')[0];
-            updateDashboardUI();
-        }
-
-        function formatHumanDate(dateStr) {
-            const today = getTodayDateString();
-            const yesterdayObj = new Date();
-            yesterdayObj.setDate(yesterdayObj.getDate() - 1);
-            const offset = yesterdayObj.getTimezoneOffset() * 60000;
-            const yesterday = new Date(yesterdayObj - offset).toISOString().split('T')[0];
-
-            if (dateStr === today) return "Сегодня";
-            if (dateStr === yesterday) return "Вчера";
-
-            const [y, m, d] = dateStr.split('-');
-            const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-            return `${parseInt(d, 10)} ${months[parseInt(m, 10) - 1]} ${y}`;
-        }
-
-        // ==========================================
-        // 4. ОБНОВЛЕНИЕ ДАШБОРДА И ДНЕВНИКА
-        // ==========================================
-        function updateDashboardUI() {
-            const label = formatHumanDate(state.selectedDate);
-            document.getElementById('today-btn').textContent = label;
-            document.getElementById('current-date-label').textContent = `${label} (${state.selectedDate})`;
-
-            const dayMeals = state.logs[state.selectedDate] || [];
-
-            // Суммируем показатели за день
-            let totalKcal = 0, totalP = 0, totalF = 0, totalC = 0;
-            dayMeals.forEach(meal => {
-                totalKcal += Number(meal.totals.kcal) || 0;
-                totalP += Number(meal.totals.p) || 0;
-                totalF += Number(meal.totals.f) || 0;
-                totalC += Number(meal.totals.c) || 0;
-            });
-
-            totalKcal = Math.round(totalKcal);
-            totalP = Math.round(totalP * 10) / 10;
-            totalF = Math.round(totalF * 10) / 10;
-            totalC = Math.round(totalC * 10) / 10;
-
-            const targetKcal = state.targets.kcal;
-            const remaining = Math.max(0, targetKcal - totalKcal);
-            const percent = targetKcal > 0 ? Math.min(100, Math.round((totalKcal / targetKcal) * 100)) : 0;
-
-            // Обновляем цифры
-            document.getElementById('header-target-kcal').textContent = targetKcal;
-            document.getElementById('ring-target-kcal').textContent = targetKcal;
-            document.getElementById('consumed-kcal').textContent = totalKcal;
-            document.getElementById('remaining-kcal').textContent = remaining;
-            document.getElementById('meals-count').textContent = dayMeals.length;
-            document.getElementById('kcal-percent').textContent = `${Math.round((totalKcal / targetKcal) * 100)}%`;
-
-            // Цвет остатка калорий
-            const remEl = document.getElementById('remaining-kcal');
-            if (totalKcal > targetKcal) {
-                remEl.textContent = `+${totalKcal - targetKcal}`;
-                remEl.classList.remove('text-emerald-400');
-                remEl.classList.add('text-amber-400');
-            } else {
-                remEl.classList.remove('text-amber-400');
-                remEl.classList.add('text-emerald-400');
-            }
-
-            // Обновляем SVG кольцо (длина окружности r=52 -> 2 * PI * 52 = 326.72)
-            const circumference = 326.72;
-            const offset = circumference - (percent / 100) * circumference;
-            document.getElementById('kcal-ring').style.strokeDashoffset = offset;
-
-            // Обновляем Б/Ж/У
-            document.getElementById('consumed-p').textContent = Math.round(totalP);
-            document.getElementById('target-p').textContent = state.targets.p;
-            document.getElementById('bar-p').style.width = `${Math.min(100, (totalP / state.targets.p) * 100)}%`;
-
-            document.getElementById('consumed-f').textContent = Math.round(totalF);
-            document.getElementById('target-f').textContent = state.targets.f;
-            document.getElementById('bar-f').style.width = `${Math.min(100, (totalF / state.targets.f) * 100)}%`;
-
-            document.getElementById('consumed-c').textContent = Math.round(totalC);
-            document.getElementById('target-c').textContent = state.targets.c;
-            document.getElementById('bar-c').style.width = `${Math.min(100, (totalC / state.targets.c) * 100)}%`;
-
-            renderMealsList(dayMeals);
-        }
-
-        function renderMealsList(meals) {
-            const container = document.getElementById('meals-list');
-            if (!meals || meals.length === 0) {
-                container.innerHTML = `
-                    <div class="bg-dark-900/60 border border-dashed border-zinc-800 rounded-3xl p-8 text-center space-y-2">
-                        <div class="w-12 h-12 rounded-2xl bg-zinc-800/80 text-zinc-500 flex items-center justify-center mx-auto">
-                            <i data-lucide="utensils" class="w-6 h-6"></i>
-                        </div>
-                        <p class="text-sm font-semibold text-zinc-300">Пока нет записей за этот день</p>
-                        <p class="text-xs text-zinc-500">Нажми «Сфоткать еду», чтобы ИИ распознал тарелку и посчитал калории</p>
-                    </div>
-                `;
-                lucide.createIcons();
-                return;
-            }
-
-            container.innerHTML = meals.slice().reverse().map(meal => {
-                const itemsHtml = meal.items.map(it => `
-                    <div class="flex items-center justify-between text-xs py-1 border-b border-zinc-800/60 last:border-0">
-                        <span class="text-zinc-300 truncate pr-2">${escapeHtml(it.name)} <span class="text-zinc-500">(${it.weight}г)</span></span>
-                        <span class="text-zinc-400 font-medium whitespace-nowrap">${Math.round(it.kcal)} ккал</span>
-                    </div>
-                `).join('');
-
-                const thumbHtml = meal.thumbnail 
-                    ? `<img src="${meal.thumbnail}" alt="Блюдо" class="w-14 h-14 rounded-2xl object-cover flex-shrink-0 border border-zinc-700/70">`
-                    : `<div class="w-14 h-14 rounded-2xl bg-dark-800 border border-zinc-800 flex items-center justify-center flex-shrink-0 text-emerald-400"><i data-lucide="utensils-crossed" class="w-6 h-6"></i></div>`;
-
-                return `
-                    <div class="bg-dark-900 border border-zinc-800/90 rounded-3xl p-4 space-y-3 shadow-md">
-                        <div class="flex items-start gap-3">
-                            ${thumbHtml}
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center justify-between">
-                                    <span class="text-xs font-medium text-zinc-400 flex items-center gap-1">
-                                        <i data-lucide="clock" class="w-3 h-3"></i> ${meal.time}
-                                    </span>
-                                    <div class="flex items-center gap-1">
-                                        <button onclick="openEditMeal('${meal.id}')" class="text-zinc-500 hover:text-emerald-400 p-1 rounded-lg transition" title="Редактировать">
-                                            <i data-lucide="pencil" class="w-4 h-4"></i>
-                                        </button>
-                                        <button onclick="deleteMeal('${meal.id}')" class="text-zinc-500 hover:text-red-400 p-1 rounded-lg transition" title="Удалить">
-                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="flex items-baseline justify-between mt-0.5">
-                                    <span class="text-base font-extrabold text-white">${Math.round(meal.totals.kcal)} ккал</span>
-                                    <div class="flex gap-2 text-[11px] font-semibold">
-                                        <span class="text-sky-400">Б ${Math.round(meal.totals.p)}</span>
-                                        <span class="text-amber-400">Ж ${Math.round(meal.totals.f)}</span>
-                                        <span class="text-emerald-400">У ${Math.round(meal.totals.c)}</span>
-                                    </div>
-                                </div>
-                                ${meal.note ? `<p class="text-[11px] text-zinc-400 italic mt-1 truncate">«${escapeHtml(meal.note)}»</p>` : ''}
-                            </div>
-                        </div>
-                        <div class="bg-dark-800/50 rounded-2xl px-3 py-2">
-                            ${itemsHtml}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            lucide.createIcons();
-        }
-
-        function openEditMeal(mealId) {
-            const meals = state.logs[state.selectedDate] || [];
-            const meal = meals.find(item => item.id === mealId);
-            if (!meal) return;
-
-            resetModalState();
-            editingMealId = mealId;
-            currentDetectedItems = JSON.parse(JSON.stringify(meal.items || []));
-            currentThumbnailDataUrl = meal.thumbnail || null;
-            document.getElementById('food-note-input').value = meal.note || '';
-            setModalMode('text');
-
-            // В режиме редактирования оставляем только список продуктов и сохранение.
-            document.getElementById('modal-title').textContent = 'Редактировать приём пищи';
-            document.getElementById('analyze-btn').classList.add('hidden');
-            document.getElementById('favorites-block').classList.add('hidden');
-            document.getElementById('mode-photo-btn').parentElement.classList.add('hidden');
-            document.getElementById('recognition-results').classList.remove('hidden');
-            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
-            if (saveButton) saveButton.textContent = 'Сохранить изменения';
-
-            renderDetectedItemsEditor();
-            document.getElementById('add-modal').classList.remove('hidden');
-            lucide.createIcons();
-        }
-
-        function deleteMeal(mealId) {
-            if (!state.logs[state.selectedDate]) return;
-            state.logs[state.selectedDate] = state.logs[state.selectedDate].filter(m => m.id !== mealId);
-            persistState();
-            updateDashboardUI();
-            showToast("Приём пищи удалён", "trash-2");
-        }
-
-        // ==========================================
-        // 5. МОДАЛЬНОЕ ОКНО: ФОТО И СЖАТИЕ ИЗОБРАЖЕНИЯ
-        // ==========================================
-        // ==========================================
-        // ИЗБРАННЫЕ БЛЮДА (без запросов к ИИ)
-        // ==========================================
-        let favorites = [];
-        let productDatabase = [];
-        let productSearchResults = [];
-        let activeProductFilter = 'all';
-
-        function loadFavorites() {
-            try {
-                const raw = JSON.parse(localStorage.getItem('ai_kbju_favorites') || '[]');
-                favorites = Array.isArray(raw) ? raw : [];
-            } catch (e) { favorites = []; }
-        }
-
-        function saveFavorites() {
-            try { localStorage.setItem('ai_kbju_favorites', JSON.stringify(favorites)); } catch (e) { console.error(e); }
-            scheduleCloudSync();
-            renderFavorites();
-        }
-
-        // ==========================================
-        // БАЗА ПРОДУКТОВ: поиск, избранное, недавние и свои продукты
-        // ==========================================
-        function loadLocalProductDatabase() {
-            try { const saved = JSON.parse(localStorage.getItem('ai_kbju_product_database') || '[]'); productDatabase = Array.isArray(saved) ? saved : []; }
-            catch (e) { productDatabase = []; }
-        }
-
-        function saveProductDatabase() {
-            try { localStorage.setItem('ai_kbju_product_database', JSON.stringify(productDatabase)); } catch (e) { showToast('Не удалось сохранить базу на устройстве', 'alert-circle'); }
-            scheduleCloudSync();
-        }
-
-        function setProductFilter(filter) {
-            activeProductFilter = filter;
-            document.querySelectorAll('[data-product-filter]').forEach(btn => btn.classList.toggle('active', btn.dataset.productFilter === filter));
-            renderProductDatabase();
-        }
-
-        function searchProductCategory(category) {
-            document.getElementById('product-search-input').value = category;
-            searchProductDatabase();
-        }
-
-        async function searchProductDatabase() {
-            const query = document.getElementById('product-search-input').value.trim();
-            if (!query) { setProductFilter('all'); return; }
-            const status = document.getElementById('product-db-status');
-            status.textContent = 'Ищем продукты…'; status.classList.remove('hidden');
-            const list = document.getElementById('product-database-list');
-            list.innerHTML = '<p class="text-xs text-zinc-400 text-center py-5">Загрузка результатов…</p>';
-            try {
-                const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=' + encodeURIComponent(query) + '&search_simple=1&action=process&json=1&page_size=30&fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments,quantity,image_front_small_url';
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                const data = await response.json();
-                productSearchResults = (data.products || []).filter(x => x.product_name || x.product_name_ru || x.product_name_uk).map(normalizeOFFProduct);
-                activeProductFilter = 'search';
-                document.querySelectorAll('[data-product-filter]').forEach(btn => btn.classList.remove('active'));
-                status.textContent = productSearchResults.length ? `Найдено: ${productSearchResults.length}. Данные могут быть неполными — сверяй с упаковкой.` : 'Ничего не найдено. Попробуй другое название или добавь продукт вручную.';
-                renderProductDatabase();
-            } catch (error) {
-                console.error('Product search error:', error);
-                status.textContent = 'Не удалось загрузить базу. Проверь подключение к интернету.';
-                list.innerHTML = '';
-            }
-        }
-
-        function normalizeOFFProduct(product) {
-            const n = product.nutriments || {};
-            const pick = (...keys) => { for (const key of keys) { const value = Number(n[key]); if (Number.isFinite(value)) return value; } return 0; };
-            return {
-                id: 'off_' + (product.code || Math.random().toString(36).slice(2)), barcode: product.code || '',
-                name: product.product_name_ru || product.product_name_uk || product.product_name || product.brands || 'Продукт',
-                brand: product.brands || '', image: product.image_front_small_url || '',
-                kcal: pick('energy-kcal_100g', 'energy-kcal_value', 'energy-kcal'),
-                p: pick('proteins_100g', 'proteins'), f: pick('fat_100g', 'fat'), c: pick('carbohydrates_100g', 'carbohydrates'),
-                source: 'off', updatedAt: Date.now()
-            };
-        }
-
-        function renderProductDatabase() {
-            const list = document.getElementById('product-database-list');
-            if (!list) return;
-            let items = [];
-            const title = { all: 'Все продукты', recent: 'Недавние', favorite: 'Избранное', custom: 'Мои продукты', search: 'Результаты поиска' };
-            if (activeProductFilter === 'search') items = productSearchResults;
-            else if (activeProductFilter === 'recent') items = productDatabase.filter(x => x.lastUsed).sort((a,b) => b.lastUsed-a.lastUsed).slice(0,30);
-            else if (activeProductFilter === 'favorite') items = productDatabase.filter(x => x.favorite);
-            else if (activeProductFilter === 'custom') items = productDatabase.filter(x => x.source === 'custom');
-            else items = productDatabase.slice().sort((a,b) => (b.lastUsed||0)-(a.lastUsed||0));
-            document.getElementById('product-list-title').textContent = title[activeProductFilter] || 'Продукты';
-            document.getElementById('product-result-count').textContent = items.length ? `${items.length} шт.` : '';
-            if (!items.length) { list.innerHTML = `<p class="text-xs text-zinc-500 text-center py-5">${activeProductFilter === 'favorite' ? 'Пока нет избранных продуктов.' : activeProductFilter === 'recent' ? 'Добавленные продукты появятся здесь.' : activeProductFilter === 'custom' ? 'Ты ещё не добавил свои продукты.' : 'Продукты не найдены.'}</p>`; return; }
-            list.innerHTML = items.map((item, index) => `
-                <div class="product-row">
-                    <div class="min-w-0 flex-1"><p class="text-xs font-semibold text-white truncate">${escapeHtml(item.name)}</p><p class="text-[10px] text-zinc-400">${item.brand ? escapeHtml(item.brand) + ' · ' : ''}${Math.round(item.kcal||0)} ккал · Б ${Number(item.p||0).toFixed(1)} · Ж ${Number(item.f||0).toFixed(1)} · У ${Number(item.c||0).toFixed(1)} на 100 г</p></div>
-                    <button onclick="toggleProductFavorite('${escapeHtml(item.id)}')" class="product-icon-btn" title="В избранное"><i data-lucide="${item.favorite ? 'star' : 'star'}" class="w-4 h-4 ${item.favorite ? 'text-amber-400' : 'text-zinc-500'}"></i></button>
-                    <button onclick="addProductToMeal('${escapeHtml(item.id)}', '${activeProductFilter}', ${index})" class="product-add-btn" title="Добавить в приём пищи"><i data-lucide="plus" class="w-4 h-4"></i></button>
-                </div>`).join('');
-            lucide.createIcons();
-        }
-
-        function getVisibleProduct(filter, index) { return filter === 'search' ? productSearchResults[index] : null; }
-
-        function toggleProductFavorite(id) {
-            let item = productDatabase.find(x => x.id === id);
-            if (!item) { const found = productSearchResults.find(x => x.id === id); if (found) { item = { ...found }; productDatabase.unshift(item); } }
-            if (!item) return;
-            item.favorite = !item.favorite; saveProductDatabase(); renderProductDatabase();
-        }
-
-        function addProductToMeal(id, filter, index) {
-            let item = filter === 'search' ? getVisibleProduct(filter, index) : productDatabase.find(x => x.id === id);
-            if (!item) return;
-            let saved = productDatabase.find(x => x.id === item.id);
-            if (!saved) { saved = { ...item }; productDatabase.unshift(saved); }
-            saved.lastUsed = Date.now(); saveProductDatabase();
-            currentDetectedItems = [{ name: saved.name, weight: 100, kcal: Number(saved.kcal)||0, p: Number(saved.p)||0, f: Number(saved.f)||0, c: Number(saved.c)||0 }];
-            resetModalState();
-            currentDetectedItems = [{ name: saved.name, weight: 100, kcal: Number(saved.kcal)||0, p: Number(saved.p)||0, f: Number(saved.f)||0, c: Number(saved.c)||0 }];
-            document.getElementById('modal-title').textContent = 'Добавить продукт';
-            document.getElementById('analyze-btn').classList.add('hidden');
-            document.getElementById('favorites-block').classList.add('hidden');
-            document.getElementById('mode-photo-btn').parentElement.classList.add('hidden');
-            document.getElementById('recognition-results').classList.remove('hidden');
-            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
-            if (saveButton) saveButton.textContent = 'Добавить в дневник за день';
-            renderDetectedItemsEditor();
-            document.getElementById('add-modal').classList.remove('hidden');
-            lucide.createIcons();
-        }
-
-        function saveCustomProduct() {
-            const name = document.getElementById('custom-product-name').value.trim();
-            if (!name) { showToast('Введи название продукта', 'alert-circle'); return; }
-            const numbers = ['kcal','p','f','c'].map(id => Number(document.getElementById('custom-product-' + id).value));
-            if (numbers.some(n => !Number.isFinite(n) || n < 0)) { showToast('Заполни КБЖУ числами не меньше нуля', 'alert-circle'); return; }
-            const item = { id: 'custom_' + Date.now(), name, kcal: numbers[0], p: numbers[1], f: numbers[2], c: numbers[3], source: 'custom', favorite: false, createdAt: Date.now() };
-            productDatabase.unshift(item); saveProductDatabase();
-            ['name','kcal','p','f','c'].forEach(id => document.getElementById('custom-product-' + id).value = '');
-            setProductFilter('custom'); showToast('Свой продукт сохранён', 'check-circle-2');
-        }
-
-
-        function renderFavorites() {
-            const block = document.getElementById('favorites-block');
-            const list = document.getElementById('favorites-list');
-            if (!block || !list) return;
-            if (favorites.length === 0) { block.classList.add('hidden'); list.innerHTML = ''; return; }
-            block.classList.remove('hidden');
-            list.innerHTML = favorites.map(fav => `
-                <div class="flex-shrink-0 flex items-center bg-dark-800 border border-zinc-700 rounded-xl">
-                    <button type="button" onclick="useFavorite('${fav.id}')" class="px-3 py-2 text-left">
-                        <span class="block text-xs font-semibold text-white truncate">${escapeHtml(fav.name)}</span>
-                        <span class="block text-[10px] text-zinc-400">${Math.round(fav.totals.kcal)} ккал</span>
-                    </button>
-                    <button type="button" onclick="removeFavorite('${fav.id}')" class="px-2 text-zinc-500 hover:text-red-400" title="Удалить из избранного">
-                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                    </button>
-                </div>
-            `).join('');
-            lucide.createIcons();
-        }
-
-        function addCurrentToFavorites() {
-            if (currentDetectedItems.length === 0) { showToast("Сначала добавь хотя бы один продукт", "alert-circle"); return; }
-            const defaultName = currentDetectedItems.map(it => it.name).join(', ').slice(0, 40);
-            const input = window.prompt('Название для избранного:', defaultName);
-            if (input === null) return;
-            const name = input.trim().slice(0, 40);
-            if (!name) return;
-            let kcal = 0, p = 0, f = 0, c = 0;
-            currentDetectedItems.forEach(it => { kcal += Number(it.kcal) || 0; p += Number(it.p) || 0; f += Number(it.f) || 0; c += Number(it.c) || 0; });
-            const entry = {
-                id: 'fav_' + Date.now(),
-                name,
-                items: currentDetectedItems.map(it => ({ ...it })),
-                totals: { kcal: Math.round(kcal), p: Math.round(p * 10) / 10, f: Math.round(f * 10) / 10, c: Math.round(c * 10) / 10 }
-            };
-            favorites = favorites.filter(x => x.name.toLowerCase() !== name.toLowerCase());
-            favorites.unshift(entry);
-            favorites = favorites.slice(0, 30);
-            saveFavorites();
-            showToast("Добавлено в избранное", "star");
-        }
-
-        function useFavorite(id) {
-            const fav = favorites.find(x => x.id === id);
-            if (!fav) return;
-            currentDetectedItems = fav.items.map(it => ({ ...it }));
-            document.getElementById('recognition-results').classList.remove('hidden');
-            renderDetectedItemsEditor();
-        }
-
-        function removeFavorite(id) {
-            const fav = favorites.find(x => x.id === id);
-            if (!fav || !window.confirm('Удалить «' + fav.name + '» из избранного?')) return;
-            favorites = favorites.filter(x => x.id !== id);
-            saveFavorites();
-        }
-
-        function openAddModal(mode = 'photo') {
-            resetModalState();
-            setModalMode(mode);
-            document.getElementById('modal-title').textContent = 'Добавить приём пищи';
-            document.getElementById('analyze-btn').classList.remove('hidden');
-            document.getElementById('favorites-block').classList.remove('hidden');
-            document.getElementById('mode-photo-btn').parentElement.classList.remove('hidden');
-            const saveButton = document.querySelector('#recognition-results button[onclick="saveMealToLog()"] span');
-            if (saveButton) saveButton.textContent = 'Добавить в дневник за день';
-            renderFavorites();
-            document.getElementById('add-modal').classList.remove('hidden');
-            lucide.createIcons();
-        }
-
-        function closeAddModal() {
-            stopBarcodeScanner();
-            document.getElementById('add-modal').classList.add('hidden');
-            editingMealId = null;
-        }
-
-        function resetModalState() {
-            editingMealId = null;
-            currentBase64Image = null;
-            currentThumbnailDataUrl = null;
-            currentDetectedItems = [];
-            document.getElementById('food-photo-input').value = '';
-            document.getElementById('food-note-input').value = '';
-            document.getElementById('photo-placeholder').classList.remove('hidden');
-            document.getElementById('photo-preview-container').classList.add('hidden');
-            document.getElementById('ai-analyzing-state').classList.add('hidden');
-            document.getElementById('recognition-results').classList.add('hidden');
-            document.getElementById('analyze-btn').disabled = false;
-            document.getElementById('analyze-btn').classList.remove('opacity-50');
-        }
-
-        function setModalMode(mode) {
-            currentModalMode = mode;
-            const photoBtn = document.getElementById('mode-photo-btn');
-            const textBtn = document.getElementById('mode-text-btn');
-            const photoSection = document.getElementById('photo-input-section');
-            const noteLabel = document.getElementById('note-label');
-            const noteInput = document.getElementById('food-note-input');
-
-            if (mode === 'photo') {
-                photoBtn.className = "py-2 text-xs font-bold rounded-lg bg-zinc-700 text-white transition flex items-center justify-center gap-1.5";
-                textBtn.className = "py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5";
-                photoSection.classList.remove('hidden');
-                noteLabel.textContent = "Уточнение для ИИ (скрытые добавки, вес, соусы):";
-                noteInput.placeholder = "Например: там в творог ещё ложка мёда, жарил на масле...";
-                noteInput.rows = 2;
-            } else {
-                textBtn.className = "py-2 text-xs font-bold rounded-lg bg-zinc-700 text-white transition flex items-center justify-center gap-1.5";
-                photoBtn.className = "py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5";
-                photoSection.classList.add('hidden');
-                noteLabel.textContent = "Опиши, что и сколько ты съел:";
-                noteInput.placeholder = "Например: 200г отварной гречки, 150г куриной грудки, 1 банан и 20г мёда";
-                noteInput.rows = 3;
-            }
-        }
-
-        // Обработка выбора фото с ресайзом для быстрой отправки в Gemini и сохранения миниатюры
-        function handlePhotoSelect(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const img = new Image();
-                img.onload = function() {
-                    // 1. Сжимаем изображение для API (макс. 1024px по большей стороне)
-                    const apiCanvas = document.createElement('canvas');
-                    const maxDim = 1024;
-                    let w = img.width;
-                    let h = img.height;
-                    if (w > maxDim || h > maxDim) {
-                        if (w > h) {
-                            h = Math.round((h * maxDim) / w);
-                            w = maxDim;
-                        } else {
-                            w = Math.round((w * maxDim) / h);
-                            h = maxDim;
-                        }
-                    }
-                    apiCanvas.width = w;
-                    apiCanvas.height = h;
-                    const ctx = apiCanvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, w, h);
-
-                    const dataUrl = apiCanvas.toDataURL('image/jpeg', 0.85);
-                    currentBase64Image = dataUrl.split(',')[1];
-                    currentImageMimeType = 'image/jpeg';
-
-                    // 2. Создаём компактную миниатюру (160px) для хранения в localStorage
-                    const thumbCanvas = document.createElement('canvas');
-                    const thumbSize = 160;
-                    thumbCanvas.width = thumbSize;
-                    thumbCanvas.height = thumbSize;
-                    const tCtx = thumbCanvas.getContext('2d');
-                    const minSide = Math.min(img.width, img.height);
-                    const sx = (img.width - minSide) / 2;
-                    const sy = (img.height - minSide) / 2;
-                    tCtx.drawImage(img, sx, sy, minSide, minSide, 0, 0, thumbSize, thumbSize);
-                    currentThumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
-
-                    // Показываем превью в UI
-                    document.getElementById('photo-preview-img').src = dataUrl;
-                    document.getElementById('photo-placeholder').classList.add('hidden');
-                    document.getElementById('photo-preview-container').classList.remove('hidden');
-                };
-                img.src = e.target.result;
-            };
-            reader.readAsDataURL(file);
-        }
-
-        // ==========================================
-        // 6. ЗАПРОС К GEMINI API ДЛЯ РАСПОЗНАВАНИЯ ЕДЫ
-        // ==========================================
-        async function fetchWithBackoff(url, options, maxRetries = 4, timeoutMs = 45000) {
-            let delay = 1000;
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), timeoutMs);
-                try {
-                    const response = await fetch(url, { ...options, signal: controller.signal });
-                    clearTimeout(timer);
-                    if (response.ok) {
-                        return await response.json();
-                    }
-                    if (response.status === 429 || response.status >= 500) {
-                        if (attempt === maxRetries) throw new Error(`HTTP ${response.status}`);
-                        await new Promise(res => setTimeout(res, delay));
-                        delay *= 2;
-                        continue;
-                    }
-                    const errText = await response.text();
-                    const fatalErr = new Error(`API Error (${response.status}): ${errText}`);
-                    fatalErr.fatal = true;
-                    throw fatalErr;
-                } catch (err) {
-                    clearTimeout(timer);
-                    if (err.name === 'AbortError') { const te = new Error('Timeout: Gemini не ответил за ' + Math.round(timeoutMs / 1000) + ' секунд'); te.fatal = true; throw te; }
-                    if (err.fatal || attempt === maxRetries) throw err;
-                    await new Promise(res => setTimeout(res, delay));
-                    delay *= 2;
-                }
-            }
-        }
-
-        async function callGemini(payload) {
-            const key = getActiveApiKey();
-            let lastErr = null;
-            for (const model of GEMINI_MODELS) {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-                try {
-                    const res = await fetchWithBackoff(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    }, 1, 25000);
-                    return res;
-                } catch (err) {
-                    err.model = model;
-                    lastErr = err;
-                    const msg = String(err && err.message || '');
-                    if (/API key not valid|API_KEY_INVALID|API Error \((401|403)\)/i.test(msg)) throw err; // с ключом проблема, другая модель не поможет
-                    console.warn('Gemini: модель ' + model + ' не сработала, пробуем следующую.', msg);
-                }
-            }
-            throw lastErr;
-        }
-
-        function describeAiError(error) {
-            const raw = String(error && error.message || error || '');
-            let apiMsg = '';
-            const i = raw.indexOf('{');
-            if (i >= 0) {
-                try { apiMsg = (JSON.parse(raw.slice(i)).error || {}).message || ''; } catch (e) { apiMsg = raw.slice(i, i + 160); }
-            }
-            const code = (raw.match(/\((\d{3})\)/) || raw.match(/HTTP (\d{3})/) || [])[1];
-            let reason;
-            if (/Timeout/i.test(raw)) reason = 'Gemini слишком долго отвечает. Попробуй ещё раз.';
-            else if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) reason = 'Нет связи с Gemini (интернет, VPN или блокировщик рекламы).';
-            else if (code === '429') reason = 'Закончился лимит Gemini. Подожди минуту или попробуй позже.';
-            else if (/API key not valid|API_KEY_INVALID|expired/i.test(raw)) reason = 'Gemini не принял ключ. Проверь API ключ в Настройках.';
-            else if (code === '404') reason = 'Модель Gemini недоступна (' + ((error && error.model) || GEMINI_MODEL) + ').';
-            else if (code === '403') reason = 'Доступ запрещён. Ключ ограничен или Gemini недоступен для твоего аккаунта/региона.';
-            else if (/JSON|Unexpected token|Пустой ответ/i.test(raw)) reason = 'Gemini вернул непонятный ответ. Попробуй ещё раз.';
-            else reason = 'Не удалось распознать.';
-            const detail = (apiMsg || raw).replace(/\s+/g, ' ').slice(0, 140);
-            return reason + (code ? ' [' + code + '] ' : ' ') + detail + (error && error.model ? ' (модель: ' + error.model + ')' : '');
-        }
-
-        async function analyzeFoodWithAI() {
-            const noteText = document.getElementById('food-note-input').value.trim();
-
-            if (currentModalMode === 'photo' && !currentBase64Image && !noteText) {
-                showToast("Сначала сделай фото еды или напиши описание", "alert-circle");
-                return;
-            }
-            if (currentModalMode === 'text' && !noteText) {
-                showToast("Опиши текстом, что ты съел", "alert-circle");
-                return;
-            }
-
-            if (!getActiveApiKey()) {
-                showToast("Сначала добавь Gemini API ключ: Настройки → Gemini API Ключ", "alert-circle");
-                return;
-            }
-
-            const analyzeBtn = document.getElementById('analyze-btn');
-            const loadingState = document.getElementById('ai-analyzing-state');
-            const resultsBlock = document.getElementById('recognition-results');
-
-            analyzeBtn.disabled = true;
-            analyzeBtn.classList.add('opacity-50');
-            loadingState.classList.remove('hidden');
-            resultsBlock.classList.add('hidden');
-
-            try {
-                const systemPrompt = `Ты — профессиональный спортивный нутрициолог и эксперт по оценке калорийности блюд по фото и тексту.
+// KBJU Track v9 — единый интерфейс добавления еды, приёмы пищи, прогресс, копия данных, офлайн
+'use strict';
+const APP_VERSION = '9';
+
+// ============ НАСТРОЙКИ ============
+const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
+const SUPABASE_URL = 'https://yyehwrqhecqcejfdgafy.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_SwA5oaF3hSMHsF3xr6AwXA_VZNbG9Up';
+const LS = { targets: 'ai_kbju_targets', profile: 'ai_kbju_profile', logs: 'ai_kbju_logs', favorites: 'ai_kbju_favorites', products: 'ai_kbju_product_database', key: 'ai_kbju_custom_api_key', icon: 'ai_kbju_app_icon' };
+const TYPES = [{ id: 'breakfast', name: 'Завтрак' }, { id: 'lunch', name: 'Обед' }, { id: 'dinner', name: 'Ужин' }, { id: 'snack', name: 'Перекус' }];
+
+// ============ ИКОНКИ (встроенные, без внешних библиотек) ============
+const ICONS = {
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/>',
+  barcode: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8M18 8v8"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  star: '<path d="m12 2.5 3.1 6.3 6.9 1-5 4.9 1.2 6.8-6.2-3.3-6.2 3.3 1.2-6.8-5-4.9 6.9-1z"/>',
+  sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17v4M17 19h4"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  home: '<path d="M3 11 12 3l9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  cloud: '<path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12a3.5 3.5 0 0 0 .5 7z"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-3 3 3 3m-5-1 2 2"/>',
+  phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  download: '<path d="M12 3v12m0 0-4-4m4 4 4-4M4 21h16"/>', upload: '<path d="M12 15V3m0 0L8 7m4-4 4 4M4 21h16"/>'
+};
+const ic = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+function paintIcons(root = document) { root.querySelectorAll('[data-i]').forEach(el => { if (!el.firstChild) el.innerHTML = ic(el.dataset.i); }); }
+
+// ============ УТИЛИТЫ ============
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const r0 = n => Math.round(Number(n) || 0);
+const r1 = n => Math.round((Number(n) || 0) * 10) / 10;
+const fmt = n => r0(n).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
+const norm = s => String(s || '').toLowerCase().replace(/ё/g, 'е').trim();
+const todayStr = () => { const n = new Date(); return new Date(n - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+function shiftDate(s, d) { const [y, m, dd] = s.split('-').map(Number); const t = new Date(y, m - 1, dd + d); return new Date(t - t.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+function parseDate(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+function humanDate(s) {
+  const t = todayStr();
+  if (s === t) return 'Сегодня'; if (s === shiftDate(t, -1)) return 'Вчера'; if (s === shiftDate(t, 1)) return 'Завтра';
+  const d = parseDate(s); return `${WD[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+function fullDate(s) { const d = parseDate(s); return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; }
+function autoType() { const h = new Date().getHours(); return h >= 5 && h < 11 ? 'breakfast' : h >= 11 && h < 16 ? 'lunch' : h >= 16 && h < 22 ? 'dinner' : 'snack'; }
+function mealType(m) { if (m.type && TYPES.some(t => t.id === m.type)) return m.type; const h = parseInt(String(m.time || '').split(':')[0], 10); if (isNaN(h)) return 'snack'; return h >= 5 && h < 11 ? 'breakfast' : h >= 11 && h < 16 ? 'lunch' : h >= 16 && h < 22 ? 'dinner' : 'snack'; }
+const getKey = () => (localStorage.getItem(LS.key) || '').trim();
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Не удалось загрузить библиотеку')); document.head.appendChild(s); }); }
+
+let toastTimer;
+function toast(msg, kind = '', ms = 3000) { const t = $('toast'); t.textContent = msg; t.className = 'toast' + (kind === 'err' ? ' err' : ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), ms); }
+
+// ============ СОСТОЯНИЕ И ХРАНИЛИЩЕ ============
+let state = {
+  selectedDate: todayStr(),
+  targets: { kcal: 3400, p: 180, f: 95, c: 455 },
+  profile: { gender: 'male', age: 25, weight: 75, height: 180, activity: 'moderate', goal: 'bulk', notes: '' },
+  logs: {}
+};
+let favorites = [];       // избранные блюда (наборы продуктов)
+let productDatabase = []; // база продуктов: на 100 г
+let view = 'today';
+let rangeDays = 7;
+let calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let lastNorm = null;
+
+function readJSON(key, fallback) { try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; } catch (e) { return fallback; } }
+function loadState() {
+  const t = readJSON(LS.targets, null); if (t) state.targets = { ...state.targets, ...t };
+  state.profile = { ...state.profile, ...readJSON(LS.profile, {}) };
+  const l = readJSON(LS.logs, {}); state.logs = l && typeof l === 'object' && !Array.isArray(l) ? l : {};
+  const f = readJSON(LS.favorites, []); favorites = Array.isArray(f) ? f : [];
+  const p = readJSON(LS.products, []); productDatabase = Array.isArray(p) ? p : [];
+}
+function persistState() {
+  try {
+    localStorage.setItem(LS.targets, JSON.stringify(state.targets));
+    localStorage.setItem(LS.profile, JSON.stringify(state.profile));
+    localStorage.setItem(LS.logs, JSON.stringify(state.logs));
+    scheduleCloudSync();
+  } catch (e) {
+    Object.keys(state.logs).forEach(d => { if (d !== state.selectedDate) state.logs[d].forEach(m => m.thumbnail = null); });
+    try { localStorage.setItem(LS.logs, JSON.stringify(state.logs)); scheduleCloudSync(); } catch (err) { toast('Память браузера заполнена. Сохраните копию и удалите старые записи.', 'err', 6000); }
+  }
+}
+function saveFavorites() { try { localStorage.setItem(LS.favorites, JSON.stringify(favorites)); } catch (e) {} scheduleCloudSync(); }
+function saveProducts() { try { localStorage.setItem(LS.products, JSON.stringify(productDatabase)); } catch (e) { toast('Не удалось сохранить базу продуктов', 'err'); } scheduleCloudSync(); }
+
+// ============ ОБЛАКО (Supabase, как в прошлых версиях) ============
+let supabaseClient = null, cloudUser = null, cloudTimer = null, applyingCloud = false, cloudReady = false, cloudMsg = '';
+function updateCloudUI(msg) {
+  if (msg) cloudMsg = msg;
+  const st = $('cloud-status'); if (!st) return;
+  st.textContent = cloudUser ? `Подключено: ${cloudUser.email || 'Google'}. Данные синхронизируются. ${cloudMsg}` : (cloudMsg || 'Войдите, чтобы данные были на всех ваших устройствах.');
+  $('btn-signin').classList.toggle('hidden', !!cloudUser);
+  $('btn-signout').classList.toggle('hidden', !cloudUser);
+}
+async function initCloud() {
+  if (!window.supabase) { updateCloudUI(navigator.onLine ? 'Облако не загрузилось.' : 'Облако доступно при подключении к интернету.'); return; }
+  try {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session && session.user) { cloudUser = session.user; updateCloudUI(); await loadCloud(); }
+    supabaseClient.auth.onAuthStateChange(async (_e, s) => { cloudUser = s ? s.user : null; updateCloudUI(); if (cloudUser) await loadCloud(); });
+  } catch (e) { console.error(e); updateCloudUI('Не удалось подключить облако.'); }
+}
+async function signIn() {
+  if (!supabaseClient) { toast('Облако недоступно: проверьте интернет', 'err'); return; }
+  const { error } = await supabaseClient.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
+  if (error) toast('Ошибка входа: ' + error.message, 'err');
+}
+async function signOut() {
+  if (!supabaseClient) return;
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) toast('Ошибка выхода: ' + error.message, 'err'); else { cloudUser = null; cloudReady = false; updateCloudUI('Вы вышли. Данные остались на устройстве.'); }
+}
+async function loadCloud() {
+  if (!supabaseClient || !cloudUser) return;
+  try {
+    const { data, error } = await supabaseClient.from('kbju_user_data').select('data').eq('user_id', cloudUser.id).maybeSingle();
+    if (error) throw error;
+    if (data && data.data) {
+      applyingCloud = true;
+      const d = data.data;
+      state.targets = d.targets || state.targets;
+      state.profile = { ...state.profile, ...(d.profile || {}) };
+      state.logs = d.logs || state.logs;
+      const ck = (d.geminiKey || '').trim(); if (ck) localStorage.setItem(LS.key, ck);
+      const hasProd = Array.isArray(d.productDatabase), hasFav = Array.isArray(d.favorites);
+      if (hasProd) { productDatabase = d.productDatabase; try { localStorage.setItem(LS.products, JSON.stringify(productDatabase)); } catch (e) {} }
+      if (hasFav) { favorites = d.favorites; try { localStorage.setItem(LS.favorites, JSON.stringify(favorites)); } catch (e) {} }
+      persistState(); renderAll();
+      applyingCloud = false; cloudReady = true;
+      if ((!ck && getKey()) || (!hasFav && favorites.length) || (!hasProd && productDatabase.length)) await saveCloud();
+      updateCloudUI('Облачные данные загружены.');
+    } else { cloudReady = true; await saveCloud(); }
+  } catch (e) { applyingCloud = false; cloudReady = false; console.error(e); updateCloudUI('Не удалось загрузить данные из облака.'); }
+}
+function scheduleCloudSync() { if (!supabaseClient || !cloudUser || applyingCloud) return; clearTimeout(cloudTimer); cloudTimer = setTimeout(saveCloud, 900); }
+async function saveCloud() {
+  if (!supabaseClient || !cloudUser || applyingCloud || !cloudReady) return;
+  const payload = { user_id: cloudUser.id, data: { targets: state.targets, profile: state.profile, logs: state.logs, geminiKey: getKey(), favorites, productDatabase }, updated_at: new Date().toISOString() };
+  try { const { error } = await supabaseClient.from('kbju_user_data').upsert(payload, { onConflict: 'user_id' }); if (error) throw error; updateCloudUI('Изменения сохранены в облаке.'); }
+  catch (e) { console.error(e); updateCloudUI('Ошибка облака: копия сохранена на устройстве.'); }
+}
+
+// ============ ЭКРАНЫ И ШТОРКИ ============
+let openSheetId = null;
+function showView(v) {
+  view = v;
+  ['today', 'progress', 'more'].forEach(n => { $('view-' + n).classList.toggle('hidden', n !== v); $('tab-' + n).classList.toggle('on', n === v); });
+  $('fab').classList.toggle('hidden', v !== 'today');
+  if (v === 'today') renderToday(); if (v === 'progress') renderProgress(); if (v === 'more') renderMore();
+  window.scrollTo(0, 0);
+}
+const SHEET_OPEN = {};
+function openSheet(id) {
+  if (openSheetId) hideSheet();
+  openSheetId = id; $(id).classList.remove('hidden'); document.body.classList.add('lock');
+  history.pushState({ sheet: id }, '');
+  const b = $(id).querySelector('.sheet-body'); if (b) b.scrollTop = 0;
+  if (SHEET_OPEN[id]) SHEET_OPEN[id]();
+}
+function hideSheet() {
+  if (!openSheetId) return;
+  const id = openSheetId; openSheetId = null;
+  $(id).classList.add('hidden'); document.body.classList.remove('lock');
+  if (id === 'sheet-add') cleanupAdd();
+}
+function closeSheet() { if (!openSheetId) return; if (history.state && history.state.sheet) history.back(); else hideSheet(); }
+window.addEventListener('popstate', () => { if (openSheetId) { hideSheet(); renderAll(); } });
+
+function renderAll() { if (view === 'today') renderToday(); else if (view === 'progress') renderProgress(); else renderMore(); }
+function gotoDate(d) { state.selectedDate = d; renderToday(); }
+
+// ============ ЭКРАН «СЕГОДНЯ» ============
+function dayTotals(date) {
+  const t = { kcal: 0, p: 0, f: 0, c: 0, n: 0 };
+  (state.logs[date] || []).forEach(m => { t.kcal += +m.totals.kcal || 0; t.p += +m.totals.p || 0; t.f += +m.totals.f || 0; t.c += +m.totals.c || 0; t.n++; });
+  return t;
+}
+function renderToday() {
+  const d = state.selectedDate, t = dayTotals(d), tg = state.targets;
+  $('date-label').innerHTML = `<b>${esc(humanDate(d))}</b><small>${esc(fullDate(d))}</small>`;
+  const left = tg.kcal - r0(t.kcal);
+  $('ring-main').textContent = fmt(Math.abs(left));
+  $('ring-sub').textContent = left >= 0 ? 'ккал осталось' : 'ккал сверх нормы';
+  const fg = $('ring-fg'), pct = tg.kcal > 0 ? Math.min(1, t.kcal / tg.kcal) : 0;
+  fg.style.strokeDashoffset = 326.73 * (1 - pct); fg.classList.toggle('over', left < 0);
+  $('sum-line').textContent = `Съедено ${fmt(t.kcal)} из ${fmt(tg.kcal)} ккал`;
+  ['p', 'f', 'c'].forEach(k => {
+    $(`m-${k}-v`).textContent = `${r0(t[k])} / ${tg[k]} г`;
+    const b = $(`m-${k}-b`); b.style.width = Math.min(100, tg[k] > 0 ? t[k] / tg[k] * 100 : 0) + '%'; b.classList.toggle('over', t[k] > tg[k] * 1.05);
+  });
+  const meals = state.logs[d] || [];
+  $('meal-groups').innerHTML = TYPES.map(ty => {
+    const ms = meals.filter(m => mealType(m) === ty.id);
+    const k = ms.reduce((s, m) => s + (+m.totals.kcal || 0), 0);
+    return `<section class="group"><div class="ghead"><div><h3>${ty.name}</h3><small>${ms.length ? fmt(k) + ' ккал' : 'пока пусто'}</small></div>
+      <button class="addmini" data-act="open-add" data-v="${ty.id}" aria-label="Добавить: ${ty.name}">${ic('plus')}</button></div>${ms.map(mealRow).join('')}</section>`;
+  }).join('');
+}
+function mealRow(m) {
+  const names = (m.items || []).map(i => `${esc(i.name)} ${r0(i.weight)} г`).join(', ');
+  const img = m.thumbnail ? `<img src="${m.thumbnail}" alt="">` : '';
+  return `<button class="mrow" data-act="edit-meal" data-id="${esc(m.id)}">${img}<div class="mtxt"><div class="mname">${names || 'Приём пищи'}</div>
+    <div class="msub">Б ${r0(m.totals.p)} · Ж ${r0(m.totals.f)} · У ${r0(m.totals.c)} · ${esc(m.time || '')}</div></div>
+    <div class="mk">${fmt(m.totals.kcal)}<small>ккал</small></div></button>`;
+}
+
+// ============ ПРОГРЕСС ============
+function renderProgress() {
+  const N = rangeDays, today = todayStr(), tg = state.targets, days = [];
+  for (let i = N - 1; i >= 0; i--) { const date = shiftDate(today, -i); days.push({ date, ...dayTotals(date) }); }
+  const logged = days.filter(x => x.n > 0);
+  const max = Math.max(tg.kcal * 1.25, ...days.map(x => x.kcal), 1);
+  const W = 360, H = 170, base = 148, bw = W / N, gap = Math.min(6, bw * 0.25);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Калории по дням">`;
+  days.forEach((x, i) => {
+    const h = x.kcal > 0 ? Math.max(3, x.kcal / max * (base - 8)) : 3;
+    const cls = 'bar-r' + (x.kcal <= 0 ? ' zero' : x.date === today ? ' today' : x.kcal > tg.kcal * 1.05 ? ' over' : '');
+    const dt = parseDate(x.date);
+    const label = N === 7 ? WD[dt.getDay()] : (dt.getDate() % 5 === 0 || i === N - 1 ? dt.getDate() : '');
+    svg += `<rect class="${cls}" x="${(i * bw + gap / 2).toFixed(1)}" y="${(base - h).toFixed(1)}" width="${(bw - gap).toFixed(1)}" height="${h.toFixed(1)}" rx="3" data-act="goto-date" data-date="${x.date}"/>`;
+    if (label !== '') svg += `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${label}</text>`;
+  });
+  const ty = base - tg.kcal / max * (base - 8);
+  svg += `<line x1="0" x2="${W}" y1="${ty.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="#9a9aa4" stroke-width="1" stroke-dasharray="4 4"/></svg>`;
+  $('chart').innerHTML = svg;
+  const avg = k => logged.length ? logged.reduce((s, x) => s + x[k], 0) / logged.length : 0;
+  const pctN = logged.length && tg.kcal ? r0(avg('kcal') / tg.kcal * 100) : 0;
+  $('stats').innerHTML = `
+    <div class="stat"><small>Среднее в день</small><b>${fmt(avg('kcal'))}</b> <em>ккал</em><br><em>${pctN}% от нормы</em></div>
+    <div class="stat"><small>Дней с записями</small><b>${logged.length}</b> <em>из ${N}</em></div>
+    <div class="stat"><small>Белки / Жиры</small><b>${r0(avg('p'))} / ${r0(avg('f'))}</b> <em>г</em></div>
+    <div class="stat"><small>Углеводы</small><b>${r0(avg('c'))}</b> <em>г в день</em></div>`;
+  $('day-list').innerHTML = logged.length ? logged.slice().reverse().map(x => `<button class="listrow" data-act="goto-date" data-date="${x.date}"><span class="lt"><b>${esc(humanDate(x.date))}</b><small>Б ${r0(x.p)} · Ж ${r0(x.f)} · У ${r0(x.c)}</small></span><span class="dk2">${fmt(x.kcal)} ккал</span></button>`).join('')
+    : '<p class="empty" style="padding:14px 0">За этот период записей пока нет.</p>';
+}
+
+// ============ «ЕЩЁ» ============
+function renderMore() {
+  const row = (act, icon, title, sub) => `<button class="listrow" data-act="${act}">${ic(icon)}<span class="lt"><b>${title}</b><small>${esc(sub)}</small></span><span class="chev">${ic('right')}</span></button>`;
+  $('more-list').innerHTML =
+    row('open-goals', 'target', 'Цели и норма', `${fmt(state.targets.kcal)} ккал · Б ${state.targets.p} · Ж ${state.targets.f} · У ${state.targets.c}`) +
+    row('open-products', 'list', 'Мои продукты', `${productDatabase.length} в базе · ${favorites.length} избранных блюд`) +
+    row('open-account', 'cloud', 'Аккаунт и копия', cloudUser ? 'Синхронизация включена' : 'Вход через Google, файл с копией') +
+    row('open-key', 'key', 'Ключ ИИ (Gemini)', getKey() ? 'Ключ задан' : 'Не задан: нужен для фото и ИИ') +
+    row('open-app', 'phone', 'Приложение', 'Установка, иконка, очистка дня');
+}
+
+// ============ КАЛЕНДАРЬ ============
+function renderCalendar() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth(), today = todayStr();
+  $('cal-label').textContent = `${MONTHS_NOM[m]} ${y}`;
+  let h = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => `<div class="wd">${d}</div>`).join('');
+  const off = (new Date(y, m, 1).getDay() + 6) % 7, dim = new Date(y, m + 1, 0).getDate();
+  for (let i = 0; i < off; i++) h += '<div></div>';
+  for (let d = 1; d <= dim; d++) {
+    const date = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const has = Array.isArray(state.logs[date]) && state.logs[date].length > 0;
+    h += `<button class="${date === state.selectedDate ? 'sel' : ''} ${date === today ? 'today' : ''}" data-act="cal-pick" data-date="${date}">${d}${has ? '<i></i>' : ''}</button>`;
+  }
+  $('cal-grid').innerHTML = h;
+}
+SHEET_OPEN['sheet-calendar'] = () => { const [y, m] = state.selectedDate.split('-').map(Number); calMonth = new Date(y, m - 1, 1); renderCalendar(); };
+
+// ============ ДОБАВЛЕНИЕ ЕДЫ: ЕДИНЫЙ ПОИСК ============
+let draft = null;
+let onlineState = { q: '', items: [], loading: false, error: '' };
+let onlineTimer = null, onlineSeq = 0;
+const onlineCache = {};
+
+function withBase(it) {
+  const w = Number(it.weight) > 0 ? Number(it.weight) : 100;
+  const k = x => (Number(x) || 0) / w * 100;
+  return { name: it.name || 'Продукт', weight: w, kcal: Number(it.kcal) || 0, p: Number(it.p) || 0, f: Number(it.f) || 0, c: Number(it.c) || 0, base: { kcal: k(it.kcal), p: k(it.p), f: k(it.f), c: k(it.c) } };
+}
+function newDraft(typeId) { draft = { items: [], type: typeId || autoType(), note: '', thumb: null, b64: null, mime: 'image/jpeg', editId: null, open: new Set(), busy: false }; }
+function openAdd(typeId, editId) {
+  if (openSheetId) hideSheet();
+  newDraft(typeId);
+  if (editId) {
+    const m = (state.logs[state.selectedDate] || []).find(x => x.id === editId);
+    if (!m) return;
+    draft.editId = editId; draft.type = mealType(m); draft.note = m.note || ''; draft.thumb = m.thumbnail || null; draft.items = (m.items || []).map(withBase);
+  }
+  onlineState = { q: '', items: [], loading: false, error: '' };
+  $('q').value = ''; $('add-title').textContent = editId ? 'Изменить приём пищи' : 'Добавить еду';
+  $('scan-panel').classList.add('hidden'); $('ai-status').classList.add('hidden');
+  openSheet('sheet-add'); renderAdd();
+}
+function cleanupAdd() { stopScanner(); clearTimeout(onlineTimer); onlineSeq++; draft = null; }
+function renderAdd() { renderTypeSeg(); renderDraft(); renderResults(); renderPhotoChip(); }
+function renderTypeSeg() { $('type-seg').innerHTML = TYPES.map(t => `<button class="${draft.type === t.id ? 'on' : ''}" data-act="set-type" data-v="${t.id}">${t.name}</button>`).join(''); }
+function draftTotals() { const t = { kcal: 0, p: 0, f: 0, c: 0 }; draft.items.forEach(i => { t.kcal += +i.kcal || 0; t.p += +i.p || 0; t.f += +i.f || 0; t.c += +i.c || 0; }); return t; }
+function renderPhotoChip() {
+  const c = $('photo-chip');
+  if (!draft.thumb) { c.classList.add('hidden'); c.innerHTML = ''; return; }
+  c.classList.remove('hidden');
+  c.innerHTML = `<img src="${draft.thumb}" alt=""><span>${draft.b64 ? 'Фото готово к распознаванию' : 'Фото приложено к записи'}</span><button class="iconbtn sm" data-act="photo-clear" aria-label="Убрать фото">${ic('x')}</button>`;
+}
+function draftRow(it, i) {
+  const open = draft.open.has(i);
+  return `<div class="drow">
+    <div class="drow-top"><div class="dn">${esc(it.name)}</div><button class="iconbtn sm" data-act="draft-del" data-idx="${i}" aria-label="Убрать продукт">${ic('x')}</button></div>
+    <div class="drow-mid"><div class="stepper"><button data-act="w-dec" data-idx="${i}" aria-label="Меньше">−</button><input type="number" inputmode="decimal" min="1" value="${r0(it.weight)}" data-dw="${i}" aria-label="Вес в граммах"><span>г</span><button data-act="w-inc" data-idx="${i}" aria-label="Больше">+</button></div>
+    <div class="dk"><b>${r0(it.kcal)}</b> ккал</div></div>
+    <button class="dmore" data-act="draft-more" data-idx="${i}">Б ${r1(it.p)} · Ж ${r1(it.f)} · У ${r1(it.c)}<span>${open ? 'скрыть' : 'изменить'}</span></button>
+    ${open ? `<div class="dedit"><label class="field"><span>Название</span><input type="text" value="${esc(it.name)}" data-df="name" data-idx="${i}"></label>
+      ${[['kcal', 'Ккал'], ['p', 'Белки'], ['f', 'Жиры'], ['c', 'Углев.']].map(([k, l]) => `<label class="field"><span>${l}</span><input type="number" inputmode="decimal" step="0.1" value="${r1(it[k])}" data-df="${k}" data-idx="${i}"></label>`).join('')}</div>` : ''}
+  </div>`;
+}
+function renderDraft() {
+  const box = $('draft-box'), n = draft.items.length, t = draftTotals();
+  box.innerHTML = n ? `<div class="card draft">${draft.items.map(draftRow).join('')}<div class="dtotal"><span>Итого: Б ${r0(t.p)} · Ж ${r0(t.f)} · У ${r0(t.c)}</span><b>${r0(t.kcal)} ккал</b></div></div>` : '';
+  const save = $('btn-save');
+  save.disabled = !n;
+  save.textContent = n ? `${draft.editId ? 'Сохранить' : 'Записать'} · ${r0(t.kcal)} ккал` : 'Добавьте продукты';
+  $('btn-fav-dish').classList.toggle('hidden', !n);
+  $('btn-del-meal').classList.toggle('hidden', !draft.editId);
+}
+function setWeight(i, w) {
+  const it = draft.items[i]; if (!it || !(w > 0)) return;
+  it.weight = w; it.kcal = it.base.kcal * w / 100; it.p = it.base.p * w / 100; it.f = it.base.f * w / 100; it.c = it.base.c * w / 100;
+}
+function setField(i, field, val) {
+  const it = draft.items[i]; if (!it) return;
+  if (field === 'name') { it.name = String(val).trim() || it.name; return; }
+  it[field] = Math.max(0, parseFloat(val) || 0); it.base[field] = it[field] / it.weight * 100;
+}
+function addToDraft(item, label) { draft.items.push(withBase(item)); renderDraft(); $('q').value = ''; onlineState = { q: '', items: [], loading: false, error: '' }; renderResults(); toast('Добавлено: ' + (label || item.name)); }
+
+// --- поиск по локальной базе ---
+function searchLocal(q) {
+  const toks = norm(q).split(/\s+/).filter(Boolean); if (!toks.length) return { products: [], dishes: [] };
+  const hit = s => { const n = norm(s); return toks.every(t => n.includes(t)); };
+  const score = p => (p.favorite ? 1000 : 0) + (p.useCount || 0) * 5 + (p.lastUsed ? p.lastUsed / 1e12 : 0);
+  return {
+    dishes: favorites.filter(f => hit(f.name)).slice(0, 5),
+    products: productDatabase.filter(p => hit(p.name + ' ' + (p.brand || ''))).sort((a, b) => score(b) - score(a)).slice(0, 12)
+  };
+}
+const prodSub = p => `${p.brand ? esc(p.brand) + ' · ' : ''}${r0(p.kcal)} ккал · Б ${r1(p.p)} · Ж ${r1(p.f)} · У ${r1(p.c)} на 100 г${p.defaultWeight ? ' · обычно ' + r0(p.defaultWeight) + ' г' : ''}`;
+const prodRow = (p, act) => `<button class="prow" data-act="${act}" data-id="${esc(p.id)}"><span class="pt"><b>${esc(p.name)}</b><small>${prodSub(p)}</small></span><span class="pl">${ic('plus')}</span></button>`;
+const dishRow = f => `<button class="prow" data-act="add-dish" data-id="${esc(f.id)}"><span class="pt"><b>${esc(f.name)}<span class="tag">блюдо</span></b><small>${r0(f.totals.kcal)} ккал · ${f.items.length} продукт(а)</small></span><span class="pl">${ic('plus')}</span></button>`;
+
+function renderResults() {
+  const q = $('q').value.trim(); let h = '';
+  if (!q) {
+    const recent = productDatabase.filter(p => p.lastUsed).sort((a, b) => b.lastUsed - a.lastUsed).slice(0, 10);
+    if (favorites.length) h += `<div class="sec">Избранные блюда</div>` + favorites.slice(0, 8).map(dishRow).join('');
+    if (recent.length) h += `<div class="sec">Недавние продукты</div>` + recent.map(p => prodRow(p, 'add-local')).join('');
+    if (!favorites.length && !recent.length) h = `<p class="empty" style="margin-top:18px">Начните вводить название продукта, опишите блюдо словами (например «гречка 200 г и куриная грудка»), сфотографируйте тарелку или отсканируйте штрихкод. Всё в одной строке выше.</p>`;
+  } else {
+    if (q.length >= 3) h += `<div class="sec">Подсчитать с ИИ</div><button class="prow ai" data-act="ai-text">${ic('sparkle')}<span class="pt"><b>Посчитать КБЖУ с помощью ИИ</b><small>«${esc(q.slice(0, 80))}»${draft.b64 ? ' + фото' : ''}</small></span></button>`;
+    if (/^\d{8,14}$/.test(q.replace(/\s/g, ''))) h += `<button class="prow" data-act="barcode-q">${ic('barcode')}<span class="pt"><b>Найти по штрихкоду</b><small>${esc(q)}</small></span></button>`;
+    const { products, dishes } = searchLocal(q);
+    if (dishes.length || products.length) h += `<div class="sec">В вашей базе</div>` + dishes.map(dishRow).join('') + products.map(p => prodRow(p, 'add-local')).join('');
+    if (q.length >= 3) {
+      h += `<div class="sec">В интернет-базе</div>`;
+      if (onlineState.q === q && onlineState.items.length) h += onlineState.items.map(p => prodRow(p, 'add-online')).join('');
+      else if (onlineState.q === q && onlineState.loading) h += `<div class="status"><span class="spin"></span>Ищем в интернете…</div>`;
+      else if (!navigator.onLine) h += `<p class="empty">Нет интернета: показаны только сохранённые продукты.</p>`;
+      else if (onlineState.q === q && onlineState.error) h += `<p class="empty">${esc(onlineState.error)}</p>`;
+      else if (onlineState.q === q) h += `<p class="empty">Ничего не найдено. Попробуйте «Посчитать с ИИ» выше.</p>`;
+    }
+  }
+  $('results').innerHTML = h;
+}
+function onQuery() {
+  const q = $('q').value.trim(); renderResults(); clearTimeout(onlineTimer);
+  if (q.length < 3 || /^\d+$/.test(q.replace(/\s/g, '')) || !navigator.onLine) { onlineState = { q: '', items: [], loading: false, error: '' }; return; }
+  if (onlineCache[q]) { onlineState = { q, items: onlineCache[q], loading: false, error: '' }; renderResults(); return; }
+  onlineState = { q, items: [], loading: true, error: '' }; renderResults();
+  onlineTimer = setTimeout(() => searchOnline(q), 600);
+}
+function normalizeOFF(p) {
+  const n = p.nutriments || {}, pick = (...ks) => { for (const k of ks) { const v = Number(n[k]); if (Number.isFinite(v)) return v; } return 0; };
+  return { id: 'off_' + (p.code || Math.random().toString(36).slice(2)), name: p.product_name_ru || p.product_name_uk || p.product_name || p.brands || 'Продукт', brand: p.brands || '',
+    kcal: pick('energy-kcal_100g', 'energy-kcal_value', 'energy-kcal'), p: pick('proteins_100g', 'proteins'), f: pick('fat_100g', 'fat'), c: pick('carbohydrates_100g', 'carbohydrates'), source: 'off' };
+}
+async function searchOnline(q) {
+  const seq = ++onlineSeq, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=' + encodeURIComponent(q) + '&search_simple=1&action=process&json=1&page_size=20&fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments';
+    const r = await fetch(url, { signal: ctl.signal }); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const items = (data.products || []).filter(x => x.product_name || x.product_name_ru || x.product_name_uk).map(normalizeOFF).filter(x => x.kcal > 0 || x.p > 0 || x.f > 0 || x.c > 0);
+    onlineCache[q] = items;
+    if (seq === onlineSeq && draft && $('q').value.trim() === q) { onlineState = { q, items, loading: false, error: '' }; renderResults(); }
+  } catch (e) {
+    if (seq === onlineSeq && draft && $('q').value.trim() === q) { onlineState = { q, items: [], loading: false, error: 'Интернет-база не ответила. Попробуйте позже или используйте ИИ.' }; renderResults(); }
+  } finally { clearTimeout(timer); }
+}
+const productToItem = p => ({ name: p.name, weight: p.defaultWeight || 100, kcal: (p.kcal || 0) * (p.defaultWeight || 100) / 100, p: (p.p || 0) * (p.defaultWeight || 100) / 100, f: (p.f || 0) * (p.defaultWeight || 100) / 100, c: (p.c || 0) * (p.defaultWeight || 100) / 100 });
+
+// --- сохранение приёма пищи ---
+function rememberProducts(items) {
+  const now = Date.now();
+  items.forEach(it => {
+    const w = it.weight > 0 ? it.weight : 100, k = x => (Number(x) || 0) / w * 100, key = norm(it.name);
+    let e = productDatabase.find(x => norm(x.name) === key);
+    if (!e) { e = { id: 'p_' + now + '_' + Math.random().toString(36).slice(2, 6), name: it.name, source: 'history', favorite: false, useCount: 0 }; productDatabase.unshift(e); }
+    Object.assign(e, { kcal: r1(k(it.kcal)), p: r1(k(it.p)), f: r1(k(it.f)), c: r1(k(it.c)), lastUsed: now, useCount: (e.useCount || 0) + 1, defaultWeight: r0(w) });
+  });
+  if (productDatabase.length > 600) {
+    const keep = productDatabase.filter(p => p.favorite || p.source === 'custom'), rest = productDatabase.filter(p => !(p.favorite || p.source === 'custom')).sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+    productDatabase = keep.concat(rest.slice(0, Math.max(0, 600 - keep.length)));
+  }
+  saveProducts();
+}
+function saveMeal() {
+  if (!draft || !draft.items.length) { toast('Добавьте хотя бы один продукт', 'err'); return; }
+  const t = draftTotals(), totals = { kcal: r0(t.kcal), p: r1(t.p), f: r1(t.f), c: r1(t.c) };
+  const items = draft.items.map(({ name, weight, kcal, p, f, c }) => ({ name, weight: r0(weight), kcal: r0(kcal), p: r1(p), f: r1(f), c: r1(c) }));
+  if (!state.logs[state.selectedDate]) state.logs[state.selectedDate] = [];
+  if (draft.editId) {
+    const m = state.logs[state.selectedDate].find(x => x.id === draft.editId);
+    if (!m) { toast('Запись не найдена', 'err'); closeSheet(); return; }
+    Object.assign(m, { items, totals, type: draft.type, note: draft.note, thumbnail: draft.thumb || m.thumbnail || null });
+    toast('Изменения сохранены');
+  } else {
+    state.logs[state.selectedDate].push({ id: 'meal_' + Date.now(), time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), type: draft.type, thumbnail: draft.thumb, note: draft.note, items, totals });
+    toast(`+${totals.kcal} ккал записано`);
+  }
+  rememberProducts(items); persistState(); closeSheet(); renderToday();
+}
+function deleteMeal() {
+  if (!draft || !draft.editId || !confirm('Удалить этот приём пищи?')) return;
+  state.logs[state.selectedDate] = (state.logs[state.selectedDate] || []).filter(m => m.id !== draft.editId);
+  persistState(); closeSheet(); renderToday(); toast('Приём пищи удалён');
+}
+function saveFavoriteDish() {
+  if (!draft || !draft.items.length) return;
+  const name = (prompt('Название избранного блюда:', draft.items.map(i => i.name).join(', ').slice(0, 40)) || '').trim().slice(0, 40); if (!name) return;
+  const t = draftTotals();
+  const entry = { id: 'fav_' + Date.now(), name, items: draft.items.map(({ name, weight, kcal, p, f, c }) => ({ name, weight, kcal: r0(kcal), p: r1(p), f: r1(f), c: r1(c) })), totals: { kcal: r0(t.kcal), p: r1(t.p), f: r1(t.f), c: r1(t.c) } };
+  favorites = favorites.filter(x => norm(x.name) !== norm(name)); favorites.unshift(entry); favorites = favorites.slice(0, 40);
+  saveFavorites(); renderResults(); toast('Блюдо сохранено в избранное');
+}
+
+// ============ ИИ (Gemini) ============
+async function fetchWithBackoff(url, options, maxRetries = 1, timeoutMs = 25000) {
+  let delay = 1000;
+  for (let a = 0; a <= maxRetries; a++) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { ...options, signal: ctl.signal }); clearTimeout(timer);
+      if (r.ok) return await r.json();
+      if (r.status === 429 || r.status >= 500) { if (a === maxRetries) throw new Error('HTTP ' + r.status); await new Promise(s => setTimeout(s, delay)); delay *= 2; continue; }
+      const fe = new Error(`API Error (${r.status}): ${await r.text()}`); fe.fatal = true; throw fe;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === 'AbortError') { const te = new Error('Timeout: Gemini не ответил за ' + Math.round(timeoutMs / 1000) + ' секунд'); te.fatal = true; throw te; }
+      if (err.fatal || a === maxRetries) throw err;
+      await new Promise(s => setTimeout(s, delay)); delay *= 2;
+    }
+  }
+}
+async function callGemini(payload) {
+  const key = getKey(); let last = null;
+  for (const model of GEMINI_MODELS) {
+    try { return await fetchWithBackoff(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); }
+    catch (err) { err.model = model; last = err; if (/API key not valid|API_KEY_INVALID|API Error \((401|403)\)/i.test(String(err.message))) throw err; }
+  }
+  throw last;
+}
+function describeAiError(error) {
+  const raw = String((error && error.message) || error || ''); let apiMsg = ''; const i = raw.indexOf('{');
+  if (i >= 0) { try { apiMsg = (JSON.parse(raw.slice(i)).error || {}).message || ''; } catch (e) { apiMsg = raw.slice(i, i + 160); } }
+  const code = (raw.match(/\((\d{3})\)/) || raw.match(/HTTP (\d{3})/) || [])[1]; let reason;
+  if (/Timeout/i.test(raw)) reason = 'Gemini слишком долго отвечает. Попробуйте ещё раз.';
+  else if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) reason = 'Нет связи с Gemini (интернет, VPN или блокировщик рекламы).';
+  else if (code === '429') reason = 'Закончился лимит Gemini. Подождите минуту.';
+  else if (/API key not valid|API_KEY_INVALID|expired/i.test(raw)) reason = 'Gemini не принял ключ. Проверьте его: Ещё → Ключ ИИ.';
+  else if (code === '404') reason = 'Модель Gemini недоступна.';
+  else if (code === '403') reason = 'Доступ запрещён: ключ ограничен или недоступен в вашем регионе.';
+  else if (/JSON|Unexpected token|Пустой ответ/i.test(raw)) reason = 'Gemini вернул непонятный ответ. Попробуйте ещё раз.';
+  else reason = 'Не удалось распознать.';
+  return reason + (code ? ' [' + code + '] ' : ' ') + (apiMsg || raw).replace(/\s+/g, ' ').slice(0, 120);
+}
+function setAIStatus(msg) { const s = $('ai-status'); if (!msg) { s.classList.add('hidden'); s.innerHTML = ''; return; } s.classList.remove('hidden'); s.innerHTML = `<span class="spin"></span>${esc(msg)}`; }
+
+async function runAI(text) {
+  const d = draft; if (!d || d.busy) return;
+  if (!d.b64 && !text) { toast('Опишите еду словами или сфотографируйте её', 'err'); return; }
+  if (!getKey()) { toast('Нужен ключ ИИ: Ещё → Ключ ИИ (Gemini)', 'err', 5000); return; }
+  d.busy = true; setAIStatus('ИИ считает КБЖУ…');
+  try {
+    const systemPrompt = `Ты — профессиональный спортивный нутрициолог и эксперт по оценке калорийности блюд по фото и тексту.
 Твоя задача:
 1. Определить каждый отдельный продукт или блюдо на фотографии и/или из текстового описания пользователя.
-2. Обязательно учесть все текстовые уточнения пользователя (например: "в твороге ещё мёд", "жарено на масле", вес в граммах и т.д.).
+2. Обязательно учесть все уточнения пользователя (добавки, способ приготовления, вес в граммах и т.д.).
 3. Реалистично оценить вес каждой порции в граммах (для готового блюда) и рассчитать калории (kcal), белки (p), жиры (f) и углеводы (c).
 4. Названия продуктов пиши понятно и кратко на русском языке.`;
-
-                const userPromptText = currentBase64Image
-                    ? `Проанализируй это фото еды и посчитай КБЖУ каждого продукта. ${noteText ? 'Дополнительное уточнение от пользователя: ' + noteText : ''}`
-                    : `Посчитай КБЖУ для следующего приёма пищи: ${noteText}`;
-
-                const parts = [{ text: userPromptText }];
-                if (currentBase64Image) {
-                    parts.push({
-                        inlineData: {
-                            mimeType: currentImageMimeType,
-                            data: currentBase64Image
-                        }
-                    });
-                }
-
-                const payload = {
-                    contents: [{ role: "user", parts }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    generationConfig: {
-                        thinkingConfig: { thinkingLevel: "low" },
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: "OBJECT",
-                            properties: {
-                                items: {
-                                    type: "ARRAY",
-                                    description: "Список распознанных продуктов или блюд",
-                                    items: {
-                                        type: "OBJECT",
-                                        properties: {
-                                            name: { type: "STRING", description: "Название продукта на русском" },
-                                            weight: { type: "NUMBER", description: "Примерный вес порции в граммах" },
-                                            kcal: { type: "NUMBER", description: "Калорийность порции в ккал" },
-                                            p: { type: "NUMBER", description: "Белки в граммах" },
-                                            f: { type: "NUMBER", description: "Жиры в граммах" },
-                                            c: { type: "NUMBER", description: "Углеводы в граммах" }
-                                        },
-                                        required: ["name", "weight", "kcal", "p", "f", "c"]
-                                    }
-                                }
-                            },
-                            required: ["items"]
-                        }
-                    }
-                };
-
-                const result = await callGemini(payload);
-
-                const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!jsonText) throw new Error("Пустой ответ от модели");
-
-                const parsed = JSON.parse(jsonText);
-                currentDetectedItems = (parsed.items || []).map(item => ({
-                    name: item.name || "Продукт",
-                    weight: Math.round(item.weight || 100),
-                    kcal: Math.round(item.kcal || 0),
-                    p: Math.round((item.p || 0) * 10) / 10,
-                    f: Math.round((item.f || 0) * 10) / 10,
-                    c: Math.round((item.c || 0) * 10) / 10
-                }));
-
-                renderDetectedItemsEditor();
-                resultsBlock.classList.remove('hidden');
-                showToast("Еда успешно распознана!", "check-circle-2");
-            } catch (error) {
-                console.error("Ошибка распознавания:", error);
-                showToast(describeAiError(error), "alert-circle", 10000);
-            } finally {
-                analyzeBtn.disabled = false;
-                analyzeBtn.classList.remove('opacity-50');
-                loadingState.classList.add('hidden');
-            }
-        }
-
-        // ==========================================
-        // СКАНЕР ШТРИХКОДОВ И БАЗА OPEN FOOD FACTS
-        // ==========================================
-        let barcodeStream = null;
-        let barcodeDetector = null;
-        let barcodeScanFrame = null;
-        let barcodeZXingControls = null;
-        let barcodeLookupBusy = false;
-
-        function setBarcodeStatus(message, isError = false) {
-            const el = document.getElementById('barcode-status');
-            if (!el) return;
-            el.textContent = message;
-            el.classList.remove('hidden', 'text-red-400', 'text-zinc-400', 'text-emerald-400');
-            el.classList.add(isError ? 'text-red-400' : 'text-zinc-400');
-        }
-
-        async function startBarcodeScanner() {
-            const panel = document.getElementById('barcode-camera-panel');
-            const video = document.getElementById('barcode-video');
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                setBarcodeStatus('Камера недоступна. Открой приложение по HTTPS или введи штрихкод вручную.', true);
-                return;
-            }
-            try {
-                panel.classList.remove('hidden');
-                if (!('BarcodeDetector' in window)) {
-                    if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserMultiFormatReader) {
-                        panel.classList.add('hidden');
-                        setBarcodeStatus('Сканер не загрузился. Введи цифры штрихкода вручную.', true);
-                        return;
-                    }
-                    const reader = new ZXingBrowser.BrowserMultiFormatReader();
-                    setBarcodeStatus('Запрашиваем доступ к камере…');
-                    barcodeZXingControls = await reader.decodeFromVideoDevice(undefined, video, (result, error, controls) => {
-                        if (controls) barcodeZXingControls = controls;
-                        if (result && result.getText()) {
-                            const code = result.getText();
-                            document.getElementById('barcode-manual-input').value = code;
-                            stopBarcodeScanner();
-                            lookupBarcodeProduct(code);
-                        }
-                    });
-                    setBarcodeStatus('Камера включена. Наведи её на штрихкод.');
-                    return;
-                }
-                const supported = await BarcodeDetector.getSupportedFormats();
-                const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'].filter(x => supported.includes(x));
-                if (!formats.length) throw new Error('Браузер не поддерживает подходящие форматы штрихкодов.');
-                barcodeDetector = new BarcodeDetector({ formats });
-                barcodeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-                video.srcObject = barcodeStream;
-                panel.classList.remove('hidden');
-                await video.play();
-                setBarcodeStatus('Камера включена. Наведи её на штрихкод.');
-                scanBarcodeFrame();
-            } catch (error) {
-                stopBarcodeScanner();
-                setBarcodeStatus(error.name === 'NotAllowedError' ? 'Нет доступа к камере. Разреши доступ в настройках браузера.' : (error.message || 'Не удалось запустить камеру.'), true);
-            }
-        }
-
-        async function scanBarcodeFrame() {
-            const video = document.getElementById('barcode-video');
-            if (!barcodeDetector || !video || video.readyState < 2 || barcodeLookupBusy) {
-                barcodeScanFrame = requestAnimationFrame(scanBarcodeFrame);
-                return;
-            }
-            try {
-                const codes = await barcodeDetector.detect(video);
-                if (codes.length && codes[0].rawValue) {
-                    document.getElementById('barcode-manual-input').value = codes[0].rawValue;
-                    stopBarcodeScanner();
-                    await lookupBarcodeProduct(codes[0].rawValue);
-                    return;
-                }
-            } catch (error) { /* продолжаем сканирование следующего кадра */ }
-            barcodeScanFrame = requestAnimationFrame(scanBarcodeFrame);
-        }
-
-        function stopBarcodeScanner() {
-            if (barcodeScanFrame) cancelAnimationFrame(barcodeScanFrame);
-            barcodeScanFrame = null;
-            if (barcodeZXingControls) {
-                try { barcodeZXingControls.stop(); } catch (error) { /* камера уже остановлена */ }
-            }
-            barcodeZXingControls = null;
-            if (barcodeStream) barcodeStream.getTracks().forEach(track => track.stop());
-            barcodeStream = null;
-            barcodeDetector = null;
-            const video = document.getElementById('barcode-video');
-            if (video) { video.pause(); video.srcObject = null; }
-            const panel = document.getElementById('barcode-camera-panel');
-            if (panel) panel.classList.add('hidden');
-        }
-
-        async function lookupBarcodeProduct(value) {
-            const input = document.getElementById('barcode-manual-input');
-            const barcode = String(value || input.value || '').replace(/\s/g, '');
-            if (!/^\d{8,14}$/.test(barcode)) {
-                setBarcodeStatus('Введи корректный штрихкод: обычно это 8–14 цифр.', true);
-                return;
-            }
-            if (barcodeLookupBusy) return;
-            barcodeLookupBusy = true;
-            setBarcodeStatus('Ищем продукт в Open Food Facts…');
-            try {
-                const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments,quantity`);
-                if (!response.ok) throw new Error('База продуктов временно недоступна. Попробуй ещё раз.');
-                const data = await response.json();
-                if (data.status !== 1 || !data.product) throw new Error('Продукт не найден. Можно добавить его вручную или попробовать другой штрихкод.');
-                const product = data.product;
-                const n = product.nutriments || {};
-                const kcal = Number(n['energy-kcal_100g'] ?? n['energy-kcal_value'] ?? (Number(n['energy_100g']) / 4.184));
-                const protein = Number(n.proteins_100g);
-                const fat = Number(n.fat_100g);
-                const carbs = Number(n.carbohydrates_100g);
-                if (![kcal, protein, fat, carbs].every(Number.isFinite)) throw new Error('У продукта нет полного набора данных КБЖУ в базе.');
-                const name = product.product_name_ru || product.product_name_uk || product.product_name || product.brands || `Продукт ${barcode}`;
-                currentDetectedItems.push({
-                    name: String(name).trim(), weight: 100,
-                    kcal: Math.round(kcal), p: Math.round(protein * 10) / 10,
-                    f: Math.round(fat * 10) / 10, c: Math.round(carbs * 10) / 10
-                });
-                renderDetectedItemsEditor();
-                document.getElementById('recognition-results').classList.remove('hidden');
-                document.getElementById('recognition-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-                setBarcodeStatus(`Добавлено: ${name}. Значения указаны на 100 г — проверь их по упаковке.`);
-                input.value = '';
-            } catch (error) {
-                setBarcodeStatus(error.message || 'Не удалось найти продукт.', true);
-            } finally {
-                barcodeLookupBusy = false;
-            }
-        }
-
-        // ==========================================
-        // 7. РЕДАКТОР РАСПОЗНАННЫХ ПРОДУКТОВ И СОХРАНЕНИЕ
-        // ==========================================
-        function renderDetectedItemsEditor() {
-            const listEl = document.getElementById('detected-items-list');
-            listEl.innerHTML = currentDetectedItems.map((item, idx) => `
-                <div class="bg-dark-800 border border-zinc-700/80 rounded-2xl p-3 space-y-2.5">
-                    <div class="flex items-center gap-2">
-                        <input type="text" value="${escapeHtml(item.name)}" onchange="updateDetectedItem(${idx}, 'name', this.value)" class="flex-1 bg-dark-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none focus:border-emerald-500">
-                        <button onclick="removeDetectedItem(${idx})" class="p-1.5 text-zinc-400 hover:text-red-400 rounded-lg bg-dark-900 border border-zinc-800" title="Удалить продукт">
-                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                        </button>
-                    </div>
-                    <div class="grid grid-cols-5 gap-1.5 text-center">
-                        <div>
-                            <span class="block text-[10px] text-zinc-400 mb-0.5">Вес (г)</span>
-                            <input type="number" value="${item.weight}" onchange="handleWeightScale(${idx}, this.value)" class="w-full bg-dark-900 border border-zinc-700 rounded-lg py-1 text-xs font-bold text-center text-white focus:outline-none focus:border-emerald-500">
-                        </div>
-                        <div>
-                            <span class="block text-[10px] text-zinc-400 mb-0.5">Ккал</span>
-                            <input type="number" value="${item.kcal}" onchange="updateDetectedItem(${idx}, 'kcal', this.value)" class="w-full bg-dark-900 border border-zinc-700 rounded-lg py-1 text-xs font-bold text-center text-emerald-400 focus:outline-none focus:border-emerald-500">
-                        </div>
-                        <div>
-                            <span class="block text-[10px] text-sky-400 mb-0.5">Б (г)</span>
-                            <input type="number" step="0.1" value="${item.p}" onchange="updateDetectedItem(${idx}, 'p', this.value)" class="w-full bg-dark-900 border border-zinc-700 rounded-lg py-1 text-xs font-semibold text-center text-white focus:outline-none focus:border-sky-400">
-                        </div>
-                        <div>
-                            <span class="block text-[10px] text-amber-400 mb-0.5">Ж (г)</span>
-                            <input type="number" step="0.1" value="${item.f}" onchange="updateDetectedItem(${idx}, 'f', this.value)" class="w-full bg-dark-900 border border-zinc-700 rounded-lg py-1 text-xs font-semibold text-center text-white focus:outline-none focus:border-amber-400">
-                        </div>
-                        <div>
-                            <span class="block text-[10px] text-emerald-400 mb-0.5">У (г)</span>
-                            <input type="number" step="0.1" value="${item.c}" onchange="updateDetectedItem(${idx}, 'c', this.value)" class="w-full bg-dark-900 border border-zinc-700 rounded-lg py-1 text-xs font-semibold text-center text-white focus:outline-none focus:border-emerald-400">
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-
-            recalculateModalTotals();
-            lucide.createIcons();
-        }
-
-        // Пропорциональный пересчёт КБЖУ при изменении веса в граммах!
-        function handleWeightScale(idx, newWeightVal) {
-            const newWeight = parseFloat(newWeightVal);
-            if (isNaN(newWeight) || newWeight <= 0) return;
-
-            const item = currentDetectedItems[idx];
-            const oldWeight = item.weight > 0 ? item.weight : 100;
-            const ratio = newWeight / oldWeight;
-
-            item.weight = Math.round(newWeight);
-            item.kcal = Math.round(item.kcal * ratio);
-            item.p = Math.round(item.p * ratio * 10) / 10;
-            item.f = Math.round(item.f * ratio * 10) / 10;
-            item.c = Math.round(item.c * ratio * 10) / 10;
-
-            renderDetectedItemsEditor();
-        }
-
-        function updateDetectedItem(idx, field, val) {
-            if (field === 'name') {
-                currentDetectedItems[idx].name = val;
-            } else {
-                currentDetectedItems[idx][field] = parseFloat(val) || 0;
-            }
-            recalculateModalTotals();
-        }
-
-        function removeDetectedItem(idx) {
-            currentDetectedItems.splice(idx, 1);
-            renderDetectedItemsEditor();
-        }
-
-        function addEmptyFoodItem() {
-            currentDetectedItems.push({
-                name: "Новый продукт",
-                weight: 100,
-                kcal: 150,
-                p: 10,
-                f: 5,
-                c: 15
-            });
-            renderDetectedItemsEditor();
-        }
-
-        function recalculateModalTotals() {
-            let kcal = 0, p = 0, f = 0, c = 0;
-            currentDetectedItems.forEach(it => {
-                kcal += Number(it.kcal) || 0;
-                p += Number(it.p) || 0;
-                f += Number(it.f) || 0;
-                c += Number(it.c) || 0;
-            });
-
-            document.getElementById('modal-total-kcal').textContent = Math.round(kcal);
-            document.getElementById('modal-total-p').textContent = Math.round(p * 10) / 10;
-            document.getElementById('modal-total-f').textContent = Math.round(f * 10) / 10;
-            document.getElementById('modal-total-c').textContent = Math.round(c * 10) / 10;
-        }
-
-        function saveMealToLog() {
-            if (currentDetectedItems.length === 0) {
-                showToast("Добавь хотя бы один продукт", "alert-circle");
-                return;
-            }
-
-            let kcal = 0, p = 0, f = 0, c = 0;
-            currentDetectedItems.forEach(it => {
-                kcal += Number(it.kcal) || 0;
-                p += Number(it.p) || 0;
-                f += Number(it.f) || 0;
-                c += Number(it.c) || 0;
-            });
-
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            const noteText = document.getElementById('food-note-input').value.trim();
-
-            const totals = {
-                kcal: Math.round(kcal),
-                p: Math.round(p * 10) / 10,
-                f: Math.round(f * 10) / 10,
-                c: Math.round(c * 10) / 10
-            };
-
-            if (!state.logs[state.selectedDate]) state.logs[state.selectedDate] = [];
-
-            if (editingMealId) {
-                const existingMeal = state.logs[state.selectedDate].find(meal => meal.id === editingMealId);
-                if (!existingMeal) {
-                    showToast('Запись не найдена. Возможно, она уже удалена.', 'alert-circle');
-                    closeAddModal();
-                    return;
-                }
-                existingMeal.note = noteText;
-                existingMeal.items = currentDetectedItems.map(item => ({ ...item }));
-                existingMeal.totals = totals;
-                if (currentThumbnailDataUrl) existingMeal.thumbnail = currentThumbnailDataUrl;
-                persistState();
-                updateDashboardUI();
-                closeAddModal();
-                showToast('Изменения сохранены', 'check-circle-2');
-                return;
-            }
-
-            const newMeal = {
-                id: 'meal_' + Date.now(),
-                time: timeStr,
-                thumbnail: currentThumbnailDataUrl,
-                note: noteText,
-                items: currentDetectedItems.map(item => ({ ...item })),
-                totals
-            };
-            state.logs[state.selectedDate].push(newMeal);
-
-            persistState();
-            updateDashboardUI();
-            closeAddModal();
-            showToast(`+${newMeal.totals.kcal} ккал записано в дневник!`, "flame");
-        }
-
-        // ==========================================
-        // 8. ИИ-НУТРИЦИОЛОГ / ТРЕНЕР (AI COACH)
-        // ==========================================
-        async function askAICoach() {
-            const btn = document.getElementById('ask-coach-btn');
-            const loading = document.getElementById('coach-loading');
-            const responseCard = document.getElementById('coach-response-card');
-            const responseTextEl = document.getElementById('coach-response-text');
-            const customQuery = document.getElementById('coach-custom-query').value.trim();
-
-            const dayMeals = state.logs[state.selectedDate] || [];
-            let eatenKcal = 0, eatenP = 0, eatenF = 0, eatenC = 0;
-            const eatenDescriptions = [];
-
-            dayMeals.forEach((m, index) => {
-                eatenKcal += m.totals.kcal;
-                eatenP += m.totals.p;
-                eatenF += m.totals.f;
-                eatenC += m.totals.c;
-                const names = m.items.map(i => `${i.name} (${i.weight}г)`).join(', ');
-                eatenDescriptions.push(`${index + 1}) ${m.time}: ${names} [${m.totals.kcal} ккал, Б:${m.totals.p} Ж:${m.totals.f} У:${m.totals.c}]`);
-            });
-
-            const remKcal = state.targets.kcal - Math.round(eatenKcal);
-            const remP = Math.round(state.targets.p - eatenP);
-            const remF = Math.round(state.targets.f - eatenF);
-            const remC = Math.round(state.targets.c - eatenC);
-
-            btn.disabled = true;
-            btn.classList.add('opacity-50');
-            loading.classList.remove('hidden');
-            responseCard.classList.add('hidden');
-
-            try {
-                const activityLabels = {
-                    sedentary: 'Сидячий образ жизни (минимум движения)',
-                    light: 'Лёгкая активность (1–3 тренировки в неделю)',
-                    moderate: 'Умеренная активность (3–5 тренировок в неделю)',
-                    high: 'Высокая активность (6–7 тренировок / физическая работа)',
-                    extreme: 'Экстремальная активность (тяжёлый спорт)'
-                };
-                const goalLabels = {
-                    bulk: 'Набор мышечной массы (профицит)',
-                    maintain: 'Поддержание веса',
-                    cut: 'Похудение / сушка (дефицит)'
-                };
-
-                const prompt = `Ты — дружелюбный, мотивирующий и практичный персональный AI-нутрициолог и фитнес-тренер.
-Проанализируй рацион пользователя за день (${formatHumanDate(state.selectedDate)}) и дай конкретные, понятные советы на русском языке.
-
-АНКЕТА ПОЛЬЗОВАТЕЛЯ:
-- Пол: ${state.profile.gender === 'female' ? 'Женский' : 'Мужской'}, Возраст: ${state.profile.age} лет, Вес: ${state.profile.weight} кг, Рост: ${state.profile.height} см
-- Образ жизни: ${activityLabels[state.profile.activity] || state.profile.activity}
-- Цель: ${goalLabels[state.profile.goal] || state.profile.goal}
-${state.profile.notes ? `- Особенности: ${state.profile.notes}` : ''}
-
-ЦЕЛИ ПОЛЬЗОВАТЕЛЯ НА ДЕНЬ:
-- Калории: ${state.targets.kcal} ккал
-- Белки: ${state.targets.p} г
-- Жиры: ${state.targets.f} г
-- Углеводы: ${state.targets.c} г
-
-УЖЕ СЪЕДЕНО СЕГОДНЯ:
-${eatenDescriptions.length > 0 ? eatenDescriptions.join('\n') : 'Пока ничего не записано за этот день.'}
-
-ИТОГО СЪЕДЕНО: ${Math.round(eatenKcal)} ккал (Б: ${Math.round(eatenP)}г, Ж: ${Math.round(eatenF)}г, У: ${Math.round(eatenC)}г).
-ОСТАЛОСЬ ДО ЦЕЛИ: ${remKcal} ккал (Б: ${remP}г, Ж: ${remF}г, У: ${remC}г).
-${customQuery ? `ДОПОЛНИТЕЛЬНЫЙ ВОПРОС ПОЛЬЗОВАТЕЛЯ: "${customQuery}"` : ''}
-
-Структура ответа (кратко, по делу, без воды, с эмодзи):
-1. Краткая оценка текущего прогресса и баланса БЖУ с учётом веса (${state.profile.weight} кг) и цели.
-2. На что сделать упор в оставшихся приёмах пищи (белок, сложные углеводы или полезные жиры).
-3. 2–3 конкретных примера блюд/перекусов с примерной граммовкой, которые идеально закроют остаток КБЖУ.`;
-
-                const payload = {
-                    contents: [{ role: "user", parts: [{ text: prompt }] }],
-                    generationConfig: { thinkingConfig: { thinkingLevel: "low" } }
-                };
-
-                const result = await callGemini(payload);
-
-                const reply = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!reply) throw new Error("Пустой ответ от ИИ-тренера");
-
-                // Форматируем жирный текст markdown в HTML
-                const formattedReply = escapeHtml(reply)
-                    .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
-
-                responseTextEl.innerHTML = formattedReply;
-                responseCard.classList.remove('hidden');
-            } catch (err) {
-                console.error("Ошибка AI Coach:", err);
-                showToast("Ошибка связи с AI тренером. Попробуй позже.", "alert-circle");
-            } finally {
-                btn.disabled = false;
-                btn.classList.remove('opacity-50');
-                loading.classList.add('hidden');
-            }
-        }
-
-        // ==========================================
-        // 9. ПРОФИЛЬ, AI-КАЛЬКУЛЯТОР НОРМЫ И НАСТРОЙКИ
-        // ==========================================
-        function selectGender(gender) {
-            state.profile.gender = gender;
-            const maleBtn = document.getElementById('gender-male-btn');
-            const femaleBtn = document.getElementById('gender-female-btn');
-            if (!maleBtn || !femaleBtn) return;
-
-            if (gender === 'male') {
-                maleBtn.className = "py-2 text-xs font-bold rounded-lg bg-emerald-500 text-zinc-950 transition";
-                femaleBtn.className = "py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition";
-            } else {
-                femaleBtn.className = "py-2 text-xs font-bold rounded-lg bg-emerald-500 text-zinc-950 transition";
-                maleBtn.className = "py-2 text-xs font-bold rounded-lg text-zinc-400 hover:text-white transition";
-            }
-        }
-
-        function readProfileInputs() {
-            state.profile.age = parseInt(document.getElementById('profile-age').value, 10) || 25;
-            state.profile.weight = parseFloat(document.getElementById('profile-weight').value) || 75;
-            state.profile.height = parseInt(document.getElementById('profile-height').value, 10) || 180;
-            state.profile.activity = document.getElementById('profile-activity').value;
-            state.profile.goal = document.getElementById('profile-goal').value;
-            state.profile.notes = document.getElementById('profile-notes').value.trim();
-            persistState();
-        }
-
-        async function calculateNormWithAI() {
-            readProfileInputs();
-
-            const btn = document.getElementById('calc-norm-btn');
-            const loading = document.getElementById('norm-loading');
-            const resultCard = document.getElementById('norm-result-card');
-
-            const activityMap = {
-                sedentary: 'Сидячий образ жизни (офис, минимум движения, коэффициент ~1.2)',
-                light: 'Лёгкая активность (1–3 тренировки в неделю, коэффициент ~1.375)',
-                moderate: 'Умеренная активность (3–5 тренировок в неделю, коэффициент ~1.55)',
-                high: 'Высокая активность (6–7 тренировок / физическая работа, коэффициент ~1.725)',
-                extreme: 'Экстремальная активность (тяжёлый спорт / 2 тренировки в день, коэффициент ~1.9)'
-            };
-            const goalMap = {
-                bulk: 'Набор мышечной массы (профицит ~10–15% к TDEE)',
-                maintain: 'Поддержание веса (равен TDEE)',
-                cut: 'Похудение / сушка (дефицит ~15–20% от TDEE с повышенным белком)'
-            };
-
-            btn.disabled = true;
-            btn.classList.add('opacity-50');
-            loading.classList.remove('hidden');
-            resultCard.classList.add('hidden');
-
-            try {
-                const systemPrompt = `Ты — сертифицированный спортивный нутрициолог.
-Рассчитай базовый обмен веществ (BMR по формуле Миффлина — Сан Жеора), общий суточный расход энергии (TDEE) и оптимальную суточную норму калорий и макронутриентов (БЖУ в граммах) под цель пользователя.
-Обязательно убедись, что сумма калорий из БЖУ (Б*4 + Ж*9 + У*4) соответствует итоговой калорийности.
-Дай краткое, понятное обоснование на русском языке (2–3 предложения), почему выбраны именно такие цифры.`;
-
-                const userPrompt = `Данные человека:
-- Пол: ${state.profile.gender === 'female' ? 'Женский' : 'Мужской'}
-- Возраст: ${state.profile.age} лет
-- Вес: ${state.profile.weight} кг
-- Рост: ${state.profile.height} см
-- Образ жизни: ${activityMap[state.profile.activity]}
-- Цель: ${goalMap[state.profile.goal]}
-${state.profile.notes ? `- Дополнительные пожелания: ${state.profile.notes}` : ''}`;
-
-                const payload = {
-                    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    generationConfig: {
-                        thinkingConfig: { thinkingLevel: "low" },
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: "OBJECT",
-                            properties: {
-                                bmr: { type: "NUMBER", description: "Базовый обмен веществ (ккал)" },
-                                tdee: { type: "NUMBER", description: "Общий суточный расход с учётом активности (ккал)" },
-                                targetKcal: { type: "NUMBER", description: "Рекомендуемая суточная калорийность под цель (ккал)" },
-                                protein: { type: "NUMBER", description: "Суточная норма белков в граммах" },
-                                fat: { type: "NUMBER", description: "Суточная норма жиров в граммах" },
-                                carbs: { type: "NUMBER", description: "Суточная норма углеводов в граммах" },
-                                explanation: { type: "STRING", description: "Краткое персональное обоснование расчёта на русском" }
-                            },
-                            required: ["bmr", "tdee", "targetKcal", "protein", "fat", "carbs", "explanation"]
-                        }
-                    }
-                };
-
-                const result = await callGemini(payload);
-
-                const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!jsonText) throw new Error("Пустой ответ от ИИ");
-
-                const parsed = JSON.parse(jsonText);
-                lastCalculatedNorm = {
-                    kcal: Math.round(parsed.targetKcal),
-                    p: Math.round(parsed.protein),
-                    f: Math.round(parsed.fat),
-                    c: Math.round(parsed.carbs)
-                };
-
-                document.getElementById('res-bmr').textContent = `${Math.round(parsed.bmr)} ккал`;
-                document.getElementById('res-tdee').textContent = `${Math.round(parsed.tdee)} ккал`;
-                document.getElementById('res-kcal').textContent = lastCalculatedNorm.kcal;
-                document.getElementById('res-p').textContent = `${lastCalculatedNorm.p}г`;
-                document.getElementById('res-f').textContent = `${lastCalculatedNorm.f}г`;
-                document.getElementById('res-c').textContent = `${lastCalculatedNorm.c}г`;
-                document.getElementById('res-explanation').textContent = parsed.explanation;
-
-                resultCard.classList.remove('hidden');
-                lucide.createIcons();
-                showToast("AI рассчитал твою персональную норму!", "sparkles");
-            } catch (err) {
-                console.error("Ошибка расчёта нормы:", err);
-                showToast("Не удалось выполнить расчёт. Попробуй ещё раз.", "alert-circle");
-            } finally {
-                btn.disabled = false;
-                btn.classList.remove('opacity-50');
-                loading.classList.add('hidden');
-            }
-        }
-
-        function applyCalculatedNorm() {
-            if (!lastCalculatedNorm) return;
-            readProfileInputs();
-            state.targets = { ...lastCalculatedNorm };
-
-            document.getElementById('setting-kcal').value = state.targets.kcal;
-            document.getElementById('setting-p').value = state.targets.p;
-            document.getElementById('setting-f').value = state.targets.f;
-            document.getElementById('setting-c').value = state.targets.c;
-
-            persistState();
-            updateDashboardUI();
-            switchTab('dashboard');
-            showToast(`Новая норма (${state.targets.kcal} ккал) применена!`, "check-circle-2");
-        }
-
-        function applyPreset(kcal, p, f, c) {
-            document.getElementById('setting-kcal').value = kcal;
-            document.getElementById('setting-p').value = p;
-            document.getElementById('setting-f').value = f;
-            document.getElementById('setting-c').value = c;
-        }
-
-        function saveSettings() {
-            readProfileInputs();
-            const kcal = parseInt(document.getElementById('setting-kcal').value, 10) || 3400;
-            const p = parseInt(document.getElementById('setting-p').value, 10) || 180;
-            const f = parseInt(document.getElementById('setting-f').value, 10) || 95;
-            const c = parseInt(document.getElementById('setting-c').value, 10) || 455;
-
-            state.targets = { kcal, p, f, c };
-            persistState();
-            updateDashboardUI();
-            switchTab('dashboard');
-            showToast("Цели КБЖУ обновлены!", "check-circle-2");
-        }
-
-        function clearCurrentDayMeals() {
-            state.logs[state.selectedDate] = [];
-            persistState();
-            updateDashboardUI();
-            showToast("Дневник за выбранный день очищен", "trash-2");
-        }
-
-        let toastTimeout;
-        function showToast(message, iconName = "info", duration = 3000) {
-            const toast = document.getElementById('toast');
-            const msgEl = document.getElementById('toast-message');
-            const iconEl = document.getElementById('toast-icon');
-
-            msgEl.textContent = message;
-            iconEl.setAttribute('data-lucide', iconName);
-            lucide.createIcons();
-
-            toast.classList.remove('hidden');
-            clearTimeout(toastTimeout);
-            toastTimeout = setTimeout(() => {
-                toast.classList.add('hidden');
-            }, duration);
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-        }
-
-        // Привязка кнопок навигации по датам и старт приложения
-        window.onload = function() {
-            initPWA();
-            loadState();
-            loadLocalProductDatabase();
-            initCloudAuth();
-
-            document.getElementById('prev-day-btn').addEventListener('click', () => changeDate(-1));
-            document.getElementById('next-day-btn').addEventListener('click', () => changeDate(1));
-            updateDashboardUI();
-            lucide.createIcons();
-        };
-    
+    const userText = d.b64 ? `Проанализируй это фото еды и посчитай КБЖУ каждого продукта. ${text ? 'Дополнительное уточнение от пользователя: ' + text : ''}` : `Посчитай КБЖУ для следующего приёма пищи: ${text}`;
+    const parts = [{ text: userText }]; if (d.b64) parts.push({ inlineData: { mimeType: d.mime, data: d.b64 } });
+    const num = t => ({ type: 'NUMBER', description: t });
+    const result = await callGemini({
+      contents: [{ role: 'user', parts }], systemInstruction: { parts: [{ text: systemPrompt }] },
+      generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', properties: { items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING', description: 'Название продукта на русском' }, weight: num('Вес порции, г'), kcal: num('Калории порции'), p: num('Белки, г'), f: num('Жиры, г'), c: num('Углеводы, г') }, required: ['name', 'weight', 'kcal', 'p', 'f', 'c'] } } }, required: ['items'] } }
+    });
+    const jt = result && result.candidates && result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts[0] && result.candidates[0].content.parts[0].text;
+    if (!jt) throw new Error('Пустой ответ от модели');
+    const parsed = JSON.parse(jt);
+    if (draft !== d) return;
+    (parsed.items || []).forEach(it => d.items.push(withBase({ name: it.name || 'Продукт', weight: Math.round(it.weight || 100), kcal: Math.round(it.kcal || 0), p: r1(it.p), f: r1(it.f), c: r1(it.c) })));
+    if (text) d.note = text; d.b64 = null; $('q').value = '';
+    renderPhotoChip(); renderDraft(); renderResults(); toast('Готово: проверьте вес и нажмите «Записать»');
+  } catch (e) { console.error(e); if (draft === d) toast(describeAiError(e), 'err', 9000); }
+  finally { d.busy = false; if (draft === d) setAIStatus(''); }
+}
+function handlePhoto(file) {
+  if (!file || !draft) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 1024; let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) { if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; } else { w = Math.round(w * maxDim / h); h = maxDim; } }
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      draft.b64 = cv.toDataURL('image/jpeg', 0.85).split(',')[1]; draft.mime = 'image/jpeg';
+      const tc = document.createElement('canvas'); tc.width = tc.height = 160; const side = Math.min(img.width, img.height);
+      tc.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 160, 160);
+      draft.thumb = tc.toDataURL('image/jpeg', 0.7);
+      renderPhotoChip(); renderResults(); runAI($('q').value.trim());
+    };
+    img.onerror = () => toast('Не удалось открыть фото', 'err'); img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ============ СКАНЕР ШТРИХКОДОВ ============
+let scanStream = null, scanDetector = null, scanFrame = null, scanZX = null, scanBusy = false;
+function setScanStatus(msg, bad) { const e = $('scan-status'); e.textContent = msg; e.style.color = bad ? 'var(--bad)' : ''; }
+async function startScanner() {
+  $('scan-panel').classList.remove('hidden'); $('scan-manual').value = '';
+  const video = $('scan-video');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setScanStatus('Камера недоступна. Введите цифры штрихкода вручную.', true); return; }
+  try {
+    setScanStatus('Запрашиваем доступ к камере…'); video.classList.remove('hidden');
+    if (!('BarcodeDetector' in window)) {
+      if (!window.ZXingBrowser) await loadScript('https://unpkg.com/@zxing/browser@0.2.1');
+      const reader = new ZXingBrowser.BrowserMultiFormatReader();
+      scanZX = await reader.decodeFromVideoDevice(undefined, video, (res, err, controls) => { if (controls) scanZX = controls; if (res && res.getText()) { const c = res.getText(); stopScanner(); lookupBarcode(c); } });
+      setScanStatus('Наведите камеру на штрихкод.'); return;
+    }
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'].filter(x => supported.includes(x));
+    if (!formats.length) throw new Error('Браузер не поддерживает нужные форматы штрихкодов.');
+    scanDetector = new BarcodeDetector({ formats });
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    video.srcObject = scanStream; await video.play(); setScanStatus('Наведите камеру на штрихкод.'); scanLoop();
+  } catch (e) { stopScanner(true); setScanStatus(e.name === 'NotAllowedError' ? 'Нет доступа к камере. Разрешите его в настройках браузера или введите цифры вручную.' : (e.message || 'Не удалось запустить камеру. Введите цифры вручную.'), true); }
+}
+async function scanLoop() {
+  const v = $('scan-video');
+  if (!scanDetector || !v || v.readyState < 2 || scanBusy) { scanFrame = requestAnimationFrame(scanLoop); return; }
+  try { const codes = await scanDetector.detect(v); if (codes.length && codes[0].rawValue) { const c = codes[0].rawValue; stopScanner(); await lookupBarcode(c); return; } } catch (e) {}
+  scanFrame = requestAnimationFrame(scanLoop);
+}
+function stopScanner(keepPanel) {
+  if (scanFrame) cancelAnimationFrame(scanFrame); scanFrame = null;
+  if (scanZX) { try { scanZX.stop(); } catch (e) {} } scanZX = null;
+  if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null; scanDetector = null;
+  const v = $('scan-video'); if (v) { v.pause(); v.srcObject = null; v.classList.add('hidden'); }
+  if (!keepPanel) $('scan-panel').classList.add('hidden');
+}
+async function lookupBarcode(value) {
+  const code = String(value || $('scan-manual').value || '').replace(/\s/g, '');
+  if (!/^\d{8,14}$/.test(code)) { $('scan-panel').classList.remove('hidden'); setScanStatus('Штрихкод — это 8–14 цифр.', true); return; }
+  if (scanBusy || !draft) return; scanBusy = true; const d = draft;
+  $('scan-panel').classList.remove('hidden'); setScanStatus('Ищем продукт…');
+  try {
+    if (!navigator.onLine) throw new Error('Нет интернета: поиск по штрихкоду недоступен.');
+    const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_ru,product_name_uk,brands,nutriments`);
+    if (!r.ok) throw new Error('База продуктов временно недоступна.');
+    const data = await r.json(); if (data.status !== 1 || !data.product) throw new Error('Продукт не найден. Найдите его по названию или добавьте вручную.');
+    const p = data.product, n = p.nutriments || {};
+    const kcal = Number(n['energy-kcal_100g'] ?? n['energy-kcal_value'] ?? (Number(n.energy_100g) / 4.184)), pr = Number(n.proteins_100g), fa = Number(n.fat_100g), ca = Number(n.carbohydrates_100g);
+    if (![kcal, pr, fa, ca].every(Number.isFinite)) throw new Error('В базе нет полных данных КБЖУ для этого продукта.');
+    const name = String(p.product_name_ru || p.product_name_uk || p.product_name || p.brands || 'Продукт ' + code).trim();
+    if (draft === d) { stopScanner(); d.items.push(withBase({ name, weight: 100, kcal: Math.round(kcal), p: r1(pr), f: r1(fa), c: r1(ca) })); $('q').value = ''; renderDraft(); renderResults(); toast('Добавлено: ' + name + '. Проверьте вес.'); }
+  } catch (e) { setScanStatus(e.message || 'Не удалось найти продукт.', true); }
+  finally { scanBusy = false; }
+}
+
+// ============ ЦЕЛИ И НОРМА ============
+function paintGender() { document.querySelectorAll('#gender-seg button').forEach(b => b.classList.toggle('on', b.dataset.v === state.profile.gender)); }
+SHEET_OPEN['sheet-goals'] = () => {
+  const t = state.targets, p = state.profile;
+  $('g-kcal').value = t.kcal; $('g-p').value = t.p; $('g-f').value = t.f; $('g-c').value = t.c;
+  $('pr-age').value = p.age; $('pr-weight').value = p.weight; $('pr-height').value = p.height; $('pr-activity').value = p.activity; $('pr-goal').value = p.goal; $('pr-notes').value = p.notes || '';
+  paintGender(); $('norm-result').classList.add('hidden'); lastNorm = null;
+};
+function readProfile() {
+  const p = state.profile;
+  p.age = parseInt($('pr-age').value, 10) || 25; p.weight = parseFloat($('pr-weight').value) || 75; p.height = parseInt($('pr-height').value, 10) || 180;
+  p.activity = $('pr-activity').value; p.goal = $('pr-goal').value; p.notes = $('pr-notes').value.trim();
+}
+function saveGoals() {
+  readProfile();
+  state.targets = { kcal: parseInt($('g-kcal').value, 10) || 3400, p: parseInt($('g-p').value, 10) || 180, f: parseInt($('g-f').value, 10) || 95, c: parseInt($('g-c').value, 10) || 455 };
+  persistState(); closeSheet(); renderAll(); toast('Цели сохранены');
+}
+async function calcNorm() {
+  readProfile(); persistState();
+  if (!getKey()) { toast('Нужен ключ ИИ: Ещё → Ключ ИИ (Gemini)', 'err', 5000); return; }
+  const act = { sedentary: 'Сидячий образ жизни (коэффициент ~1.2)', light: 'Лёгкая активность, 1–3 тренировки в неделю (~1.375)', moderate: 'Умеренная активность, 3–5 тренировок (~1.55)', high: 'Высокая активность, 6–7 тренировок (~1.725)', extreme: 'Экстремальная активность (~1.9)' };
+  const goal = { bulk: 'Набор мышечной массы (профицит ~10–15% к TDEE)', maintain: 'Поддержание веса (равен TDEE)', cut: 'Похудение (дефицит ~15–20% от TDEE с повышенным белком)' };
+  const btn = $('btn-calc'); btn.disabled = true; $('norm-loading').classList.remove('hidden'); $('norm-result').classList.add('hidden');
+  try {
+    const p = state.profile;
+    const system = `Ты — сертифицированный спортивный нутрициолог.
+Рассчитай базовый обмен веществ (формула Миффлина — Сан Жеора), суточный расход энергии (TDEE) и оптимальную суточную норму калорий и БЖУ в граммах под цель пользователя.
+Убедись, что калории из БЖУ (Б*4 + Ж*9 + У*4) соответствуют итоговой калорийности.
+Дай краткое обоснование на русском языке (2–3 предложения).`;
+    const user = `Данные человека:\n- Пол: ${p.gender === 'female' ? 'Женский' : 'Мужской'}\n- Возраст: ${p.age} лет\n- Вес: ${p.weight} кг\n- Рост: ${p.height} см\n- Образ жизни: ${act[p.activity]}\n- Цель: ${goal[p.goal]}${p.notes ? '\n- Пожелания: ' + p.notes : ''}`;
+    const N = t => ({ type: 'NUMBER', description: t });
+    const res = await callGemini({ contents: [{ role: 'user', parts: [{ text: user }] }], systemInstruction: { parts: [{ text: system }] },
+      generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', properties: { bmr: N('BMR'), tdee: N('TDEE'), targetKcal: N('Рекомендуемая калорийность'), protein: N('Белки, г'), fat: N('Жиры, г'), carbs: N('Углеводы, г'), explanation: { type: 'STRING', description: 'Обоснование на русском' } }, required: ['bmr', 'tdee', 'targetKcal', 'protein', 'fat', 'carbs', 'explanation'] } } });
+    const jt = res && res.candidates && res.candidates[0] && res.candidates[0].content.parts[0].text; if (!jt) throw new Error('Пустой ответ от ИИ');
+    const j = JSON.parse(jt); lastNorm = { kcal: r0(j.targetKcal), p: r0(j.protein), f: r0(j.fat), c: r0(j.carbs) };
+    $('res-bmr').textContent = r0(j.bmr) + ' ккал'; $('res-tdee').textContent = r0(j.tdee) + ' ккал'; $('res-kcal').textContent = lastNorm.kcal + ' ккал';
+    $('res-pfc').textContent = `${lastNorm.p} / ${lastNorm.f} / ${lastNorm.c} г`; $('res-explain').textContent = j.explanation || '';
+    $('norm-result').classList.remove('hidden');
+  } catch (e) { console.error(e); toast(describeAiError(e), 'err', 8000); }
+  finally { btn.disabled = false; $('norm-loading').classList.add('hidden'); }
+}
+function applyNorm() { if (!lastNorm) return; state.targets = { ...lastNorm }; persistState(); closeSheet(); renderAll(); toast(`Новая норма: ${state.targets.kcal} ккал`); }
+
+// ============ МОИ ПРОДУКТЫ ============
+let pmFilter = 'all';
+SHEET_OPEN['sheet-products'] = () => { $('pm-q').value = ''; pmFilter = 'all'; paintPM(); renderPM(); };
+function paintPM() { document.querySelectorAll('#pm-seg button').forEach(b => b.classList.toggle('on', b.dataset.v === pmFilter)); }
+function renderPM() {
+  const q = norm($('pm-q').value), box = $('pm-list'), tokens = q.split(/\s+/).filter(Boolean), hit = s => tokens.every(t => norm(s).includes(t));
+  if (pmFilter === 'dish') {
+    const list = favorites.filter(f => hit(f.name));
+    box.innerHTML = list.length ? list.map(f => `<div class="listrow"><span class="lt"><b>${esc(f.name)}</b><small>${r0(f.totals.kcal)} ккал · ${f.items.length} продукт(а)</small></span><button class="iconbtn sm" data-act="dish-del" data-id="${esc(f.id)}" aria-label="Удалить">${ic('trash')}</button></div>`).join('') : '<p class="empty" style="padding:14px 0">Избранных блюд пока нет. Их можно сохранить звёздочкой при добавлении еды.</p>';
+    return;
+  }
+  let list = productDatabase.filter(p => hit(p.name + ' ' + (p.brand || '')));
+  if (pmFilter === 'fav') list = list.filter(p => p.favorite); if (pmFilter === 'custom') list = list.filter(p => p.source === 'custom');
+  list.sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.lastUsed || 0) - (a.lastUsed || 0));
+  box.innerHTML = list.length ? list.slice(0, 150).map(p => `<div class="listrow"><span class="lt"><b>${esc(p.name)}</b><small>${prodSub(p)}</small></span>
+    <button class="iconbtn sm" data-act="pm-fav" data-id="${esc(p.id)}" aria-label="В избранное" style="color:${p.favorite ? 'var(--warn)' : 'var(--mu)'}">${p.favorite ? ic('star').replace('fill="none"', 'fill="currentColor"') : ic('star')}</button>
+    <button class="iconbtn sm" data-act="pm-del" data-id="${esc(p.id)}" aria-label="Удалить">${ic('trash')}</button></div>`).join('')
+    : '<p class="empty" style="padding:14px 0">Здесь появятся продукты, которые вы добавляете в дневник. Они находятся поиском за секунду, даже без интернета.</p>';
+}
+function saveCustom() {
+  const name = $('cp-name').value.trim(); if (!name) { toast('Введите название', 'err'); return; }
+  const v = ['kcal', 'p', 'f', 'c'].map(k => Number($('cp-' + k).value));
+  if (v.some(n => !Number.isFinite(n) || n < 0)) { toast('Заполните КБЖУ числами', 'err'); return; }
+  productDatabase.unshift({ id: 'custom_' + Date.now(), name, kcal: v[0], p: v[1], f: v[2], c: v[3], source: 'custom', favorite: false, lastUsed: Date.now(), useCount: 0 });
+  saveProducts(); ['name', 'kcal', 'p', 'f', 'c'].forEach(k => $('cp-' + k).value = ''); pmFilter = 'custom'; paintPM(); renderPM(); toast('Продукт сохранён');
+}
+
+// ============ АККАУНТ, КОПИЯ, КЛЮЧ, ПРИЛОЖЕНИЕ ============
+SHEET_OPEN['sheet-account'] = () => { updateCloudUI(); const lb = localStorage.getItem('ai_kbju_last_backup'); $('backup-info').textContent = lb ? 'Последняя копия: ' + lb : 'Копию в файл вы ещё не сохраняли.'; };
+function exportBackup() {
+  const data = { app: 'kbju-track', version: 9, exportedAt: new Date().toISOString(), targets: state.targets, profile: state.profile, logs: state.logs, favorites, productDatabase };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `kbju-backup-${todayStr()}.json`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  localStorage.setItem('ai_kbju_last_backup', fullDate(todayStr())); $('backup-info').textContent = 'Последняя копия: ' + fullDate(todayStr()); toast('Копия сохранена в файл');
+}
+function importBackup(file) {
+  if (!file) return; const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const d = JSON.parse(rd.result);
+      if (!d || typeof d !== 'object' || !d.logs || typeof d.logs !== 'object') throw new Error('bad');
+      if (!confirm('Добавить данные из копии к текущим? Новые записи и продукты добавятся, цели и профиль возьмутся из файла.')) return;
+      let added = 0;
+      if (d.targets) state.targets = { ...state.targets, ...d.targets }; if (d.profile) state.profile = { ...state.profile, ...d.profile };
+      Object.keys(d.logs).forEach(date => {
+        const cur = state.logs[date] || [], ids = new Set(cur.map(m => m.id));
+        (Array.isArray(d.logs[date]) ? d.logs[date] : []).forEach(m => { if (m && m.id && !ids.has(m.id)) { cur.push(m); added++; } });
+        cur.sort((a, b) => String(a.time).localeCompare(String(b.time))); state.logs[date] = cur;
+      });
+      if (Array.isArray(d.favorites)) { const ids = new Set(favorites.map(f => f.id)); d.favorites.forEach(f => { if (f && f.id && !ids.has(f.id)) favorites.push(f); }); saveFavorites(); }
+      if (Array.isArray(d.productDatabase)) { const ids = new Set(productDatabase.map(p => p.id)); d.productDatabase.forEach(p => { if (p && p.id && !ids.has(p.id)) productDatabase.push(p); }); saveProducts(); }
+      persistState(); renderAll(); toast(`Копия загружена: добавлено записей — ${added}`);
+    } catch (e) { toast('Это не файл копии КБЖУ', 'err'); }
+  };
+  rd.readAsText(file);
+}
+SHEET_OPEN['sheet-key'] = () => { $('key-input').value = getKey(); $('key-input').type = 'password'; };
+function saveKey() {
+  const v = $('key-input').value.trim();
+  if (v) localStorage.setItem(LS.key, v); else localStorage.removeItem(LS.key);
+  scheduleCloudSync(); closeSheet(); renderAll(); toast(v ? 'Ключ сохранён' : 'Ключ удалён');
+}
+
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; const b = $('install-native'); if (b) b.classList.remove('hidden'); });
+window.addEventListener('appinstalled', () => { deferredInstall = null; toast('Приложение установлено'); });
+SHEET_OPEN['sheet-app'] = () => {
+  $('install-native').classList.toggle('hidden', !deferredInstall);
+  $('sw-status').textContent = ('serviceWorker' in navigator && navigator.serviceWorker.controller) ? 'Работа без интернета включена: дневник открывается и без сети.' : 'Работа без интернета включится после следующего запуска приложения.';
+};
+function makeDefaultIcon() {
+  const c = document.createElement('canvas'); c.width = c.height = 512; const x = c.getContext('2d');
+  x.fillStyle = '#0b0b0c'; x.fillRect(0, 0, 512, 512);
+  x.strokeStyle = '#9bdca0'; x.lineWidth = 34; x.lineCap = 'round'; x.beginPath(); x.arc(256, 256, 170, -Math.PI / 2, Math.PI * 1.1); x.stroke();
+  x.fillStyle = '#f3f3f4'; x.font = '800 108px -apple-system, "Segoe UI", Roboto, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('КБЖУ', 256, 262);
+  return c.toDataURL('image/png');
+}
+function applyIcon(url) {
+  const a = $('apple-touch-icon'); if (a) a.href = url;
+  const m = { name: 'КБЖУ — дневник питания', short_name: 'КБЖУ', start_url: location.href.split('#')[0], display: 'standalone', orientation: 'portrait', background_color: '#0b0b0c', theme_color: '#0b0b0c', icons: [{ src: url, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }] };
+  const el = $('pwa-manifest'); if (el) el.href = URL.createObjectURL(new Blob([JSON.stringify(m)], { type: 'application/manifest+json' }));
+}
+function pickIcon(file) {
+  if (!file || !file.type.startsWith('image/')) { toast('Выберите картинку', 'err'); return; }
+  const rd = new FileReader();
+  rd.onload = () => { const img = new Image(); img.onload = () => {
+    const c = document.createElement('canvas'); c.width = c.height = 512; const s = Math.min(img.width, img.height);
+    c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
+    const url = c.toDataURL('image/png'); try { localStorage.setItem(LS.icon, url); applyIcon(url); toast('Иконка обновлена'); } catch (e) { toast('Картинка слишком большая', 'err'); }
+  }; img.onerror = () => toast('Не удалось открыть картинку', 'err'); img.src = rd.result; };
+  rd.readAsDataURL(file);
+}
+function initPWA() {
+  try { applyIcon(localStorage.getItem(LS.icon) || makeDefaultIcon()); } catch (e) {}
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+function updateOnlinePill() { $('offline-pill').classList.toggle('hidden', navigator.onLine); }
+
+// ============ ИИ-СОВЕТ ============
+async function askCoach() {
+  if (!getKey()) { toast('Нужен ключ ИИ: Ещё → Ключ ИИ (Gemini)', 'err', 5000); return; }
+  const meals = state.logs[state.selectedDate] || [], t = dayTotals(state.selectedDate), tg = state.targets, p = state.profile;
+  const eaten = meals.map((m, i) => `${i + 1}) ${m.time} (${(TYPES.find(x => x.id === mealType(m)) || {}).name}): ${m.items.map(x => `${x.name} (${x.weight}г)`).join(', ')} [${m.totals.kcal} ккал, Б:${m.totals.p} Ж:${m.totals.f} У:${m.totals.c}]`);
+  const q = $('coach-q').value.trim(), btn = $('btn-coach'); btn.disabled = true; $('coach-loading').classList.remove('hidden'); $('coach-out').classList.add('hidden');
+  try {
+    const prompt = `Ты — дружелюбный и практичный персональный нутрициолог. Проанализируй рацион за день (${humanDate(state.selectedDate)}) и дай конкретные советы на русском языке.
+
+АНКЕТА: ${p.gender === 'female' ? 'женщина' : 'мужчина'}, ${p.age} лет, ${p.weight} кг, ${p.height} см. Активность: ${p.activity}. Цель: ${p.goal}.${p.notes ? ' Особенности: ' + p.notes : ''}
+НОРМА НА ДЕНЬ: ${tg.kcal} ккал, Б ${tg.p} г, Ж ${tg.f} г, У ${tg.c} г.
+УЖЕ СЪЕДЕНО:
+${eaten.length ? eaten.join('\n') : 'Пока ничего не записано.'}
+ИТОГО: ${r0(t.kcal)} ккал (Б ${r0(t.p)}, Ж ${r0(t.f)}, У ${r0(t.c)}). ОСТАЛОСЬ: ${tg.kcal - r0(t.kcal)} ккал (Б ${r0(tg.p - t.p)}, Ж ${r0(tg.f - t.f)}, У ${r0(tg.c - t.c)}).
+${q ? 'ВОПРОС ПОЛЬЗОВАТЕЛЯ: "' + q + '"' : ''}
+
+Ответ кратко и по делу: 1) оценка баланса, 2) на что сделать упор дальше, 3) 2–3 примера блюд с граммовкой под остаток. Без звёздочек и markdown-разметки.`;
+    const res = await callGemini({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } });
+    const reply = res && res.candidates && res.candidates[0] && res.candidates[0].content.parts[0].text; if (!reply) throw new Error('Пустой ответ от ИИ');
+    const out = $('coach-out'); out.textContent = reply.replace(/\*\*/g, '').replace(/^\s*[*#]+\s?/gm, ''); out.classList.remove('hidden');
+  } catch (e) { console.error(e); toast(describeAiError(e), 'err', 8000); }
+  finally { btn.disabled = false; $('coach-loading').classList.add('hidden'); }
+}
+
+// ============ ОБРАБОТЧИКИ ============
+const ACT = {
+  tab: d => showView(d.v),
+  'day-prev': () => gotoDate(shiftDate(state.selectedDate, -1)), 'day-next': () => gotoDate(shiftDate(state.selectedDate, 1)),
+  'open-calendar': () => openSheet('sheet-calendar'),
+  'cal-prev': () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); renderCalendar(); },
+  'cal-next': () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); renderCalendar(); },
+  'cal-pick': d => { state.selectedDate = d.date; closeSheet(); showView('today'); },
+  'cal-today': () => { state.selectedDate = todayStr(); closeSheet(); showView('today'); },
+  'close-sheet': () => closeSheet(),
+  'goto-date': d => { state.selectedDate = d.date; showView('today'); },
+  range: d => { rangeDays = +d.v; document.querySelectorAll('#range-seg button').forEach(b => b.classList.toggle('on', b.dataset.v === d.v)); renderProgress(); },
+  'open-add': d => openAdd(d.v), 'edit-meal': d => openAdd(null, d.id),
+  'open-coach': () => openSheet('sheet-coach'), 'ask-coach': askCoach,
+  'open-goals': () => openSheet('sheet-goals'), 'open-products': () => openSheet('sheet-products'), 'open-account': () => openSheet('sheet-account'), 'open-key': () => openSheet('sheet-key'), 'open-app': () => openSheet('sheet-app'),
+  // окно добавления
+  'set-type': d => { draft.type = d.v; renderTypeSeg(); },
+  'pick-photo': () => { if (!getKey()) { toast('Для фото нужен ключ ИИ: Ещё → Ключ ИИ (Gemini)', 'err', 5000); return; } $('photo-input').click(); },
+  'photo-clear': () => { draft.thumb = null; draft.b64 = null; renderPhotoChip(); renderResults(); },
+  'open-scan': () => startScanner(), 'scan-close': () => stopScanner(), 'scan-find': () => lookupBarcode(),
+  'barcode-q': () => lookupBarcode($('q').value),
+  'ai-text': () => runAI($('q').value.trim()),
+  'draft-del': d => { draft.items.splice(+d.idx, 1); draft.open.clear(); renderDraft(); },
+  'draft-more': d => { const i = +d.idx; draft.open.has(i) ? draft.open.delete(i) : draft.open.add(i); renderDraft(); },
+  'w-dec': d => { const it = draft.items[+d.idx], st = it.weight > 50 ? 10 : 5; setWeight(+d.idx, Math.max(st, it.weight - st)); renderDraft(); },
+  'w-inc': d => { const it = draft.items[+d.idx], st = it.weight >= 50 ? 10 : 5; setWeight(+d.idx, it.weight + st); renderDraft(); },
+  'add-local': d => { const p = productDatabase.find(x => x.id === d.id); if (p) addToDraft(productToItem(p), p.name); },
+  'add-online': d => { const p = onlineState.items.find(x => x.id === d.id); if (p) addToDraft(productToItem(p), p.name); },
+  'add-dish': d => { const f = favorites.find(x => x.id === d.id); if (!f) return; f.items.forEach(i => draft.items.push(withBase(i))); renderDraft(); $('q').value = ''; renderResults(); toast('Добавлено: ' + f.name); },
+  'save-meal': () => saveMeal(), 'del-meal': () => deleteMeal(), 'fav-dish': () => saveFavoriteDish(),
+  // цели
+  gender: d => { state.profile.gender = d.v; paintGender(); }, 'calc-norm': () => calcNorm(), 'apply-norm': () => applyNorm(), 'save-goals': () => saveGoals(),
+  // продукты
+  'pm-filter': d => { pmFilter = d.v; paintPM(); renderPM(); },
+  'pm-fav': d => { const p = productDatabase.find(x => x.id === d.id); if (p) { p.favorite = !p.favorite; saveProducts(); renderPM(); } },
+  'pm-del': d => { const p = productDatabase.find(x => x.id === d.id); if (p && confirm(`Удалить «${p.name}» из базы?`)) { productDatabase = productDatabase.filter(x => x.id !== d.id); saveProducts(); renderPM(); } },
+  'dish-del': d => { const f = favorites.find(x => x.id === d.id); if (f && confirm(`Удалить блюдо «${f.name}»?`)) { favorites = favorites.filter(x => x.id !== d.id); saveFavorites(); renderPM(); } },
+  'save-custom': () => saveCustom(),
+  // аккаунт, ключ, приложение
+  signin: () => signIn(), signout: () => signOut(),
+  'backup-export': () => exportBackup(), 'backup-import': () => $('backup-input').click(),
+  'key-toggle': () => { const i = $('key-input'); i.type = i.type === 'password' ? 'text' : 'password'; }, 'key-save': () => saveKey(),
+  'install-native': async () => { if (!deferredInstall) return; deferredInstall.prompt(); const r = await deferredInstall.userChoice; if (r.outcome === 'accepted') deferredInstall = null; $('install-native').classList.add('hidden'); },
+  'icon-pick': () => $('icon-input').click(),
+  'icon-reset': () => { localStorage.removeItem(LS.icon); applyIcon(makeDefaultIcon()); toast('Стандартная иконка возвращена'); },
+  'clear-day': () => { if (confirm('Очистить все записи за ' + humanDate(state.selectedDate).toLowerCase() + '?')) { state.logs[state.selectedDate] = []; persistState(); closeSheet(); renderAll(); toast('День очищен'); } }
+};
+function bindEvents() {
+  document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el) return; const fn = ACT[el.dataset.act]; if (fn) fn(el.dataset, el, e); });
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (t.id === 'photo-input') { handlePhoto(t.files[0]); t.value = ''; }
+    else if (t.id === 'backup-input') { importBackup(t.files[0]); t.value = ''; }
+    else if (t.id === 'icon-input') { pickIcon(t.files[0]); t.value = ''; }
+    else if (draft && t.dataset.dw !== undefined) { setWeight(+t.dataset.dw, parseFloat(t.value)); renderDraft(); }
+    else if (draft && t.dataset.df) { setField(+t.dataset.idx, t.dataset.df, t.value); renderDraft(); }
+  });
+  $('q').addEventListener('input', onQuery);
+  $('q').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+  $('pm-q').addEventListener('input', renderPM);
+  window.addEventListener('online', () => { updateOnlinePill(); initCloud(); }); window.addEventListener('offline', updateOnlinePill);
+}
+function start() { paintIcons(); initPWA(); loadState(); bindEvents(); updateOnlinePill(); showView('today'); initCloud(); }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
