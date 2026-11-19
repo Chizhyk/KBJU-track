@@ -25,7 +25,7 @@
     
     
     <script>
-      // KBJU Track v7: тема автоматически следует настройкам устройства.
+      // KBJU Track v8: полностью обновлённый мобильный интерфейс; тема автоматически следует настройкам устройства.
       (() => {
         const media = window.matchMedia('(prefers-color-scheme: dark)');
         const applyTheme = () => {
@@ -39,7 +39,7 @@
         media.addEventListener?.('change', applyTheme);
       })();
     </script>
-    <link rel="stylesheet" href="css/styles.css?v=7">
+    <link rel="stylesheet" href="css/styles.css?v=8">
 </head>
 <body class="min-h-screen flex flex-col items-center justify-start sm:pb-10 selection:bg-emerald-500 selection:text-zinc-950">
 
@@ -54,7 +54,7 @@
                 </div>
                 <div class="truncate">
                     <h1 class="text-sm sm:text-base font-bold tracking-tight text-white leading-none truncate">AI КБЖУ</h1>
-                    <span class="text-[10px] sm:text-[11px] text-emerald-400 font-medium block truncate">Умный трекер <span class="build-version">• v7</span></span>
+                    <span class="text-[10px] sm:text-[11px] text-emerald-400 font-medium block truncate">Умный трекер <span class="build-version">• v8</span></span>
                 </div>
             </div>
 
@@ -575,7 +575,7 @@
                 </div>
 
                 <!-- Версия сайта (меняй при каждом обновлении файла) -->
-                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.2 · 19.11.2026 · сборка 7</p>
+                <p id="app-version" class="text-center text-[11px] text-zinc-500 pt-1 pb-2">Версия сайта: v1.2 · 19.11.2026 · сборка 8</p>
             </section>
 
         </main>
@@ -858,6 +858,6 @@
 
     </div>
 
-    <script src="js/app.js?v=7"></script>
+    <script src="js/app.js?v=8"></script>
 </body>
 </html>

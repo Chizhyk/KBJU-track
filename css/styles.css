@@ -370,3 +370,146 @@ html.light .product-filter.active { background: rgba(36,199,125,.12) !important;
   body { padding-bottom: 2rem !important; }
   nav > div { border-radius: 23px !important; border-bottom: 1px solid var(--line) !important; margin-bottom: .75rem; }
 }
+
+/* =====================================================
+   KBJU TRACK v8 — FULL MOBILE PRODUCT REDESIGN
+   Visual layer only: application logic and element IDs stay intact.
+   ===================================================== */
+:root {
+  --app-bg:#0b1010; --surface:#121b19; --surface-raised:#1a2622;
+  --surface-soft:#22312b; --line:rgba(161,190,174,.14);
+  --text-main:#f3f8f4; --text-muted:#94a79c;
+  --accent:#39d69a; --accent-strong:#20b77d;
+  --nav-bg:rgba(14,22,20,.94);
+}
+html.light {
+  --app-bg:#f3f7f4; --surface:#ffffff; --surface-raised:#f0f5f1;
+  --surface-soft:#e7efe9; --line:rgba(28,70,48,.12);
+  --text-main:#14251c; --text-muted:#718278;
+  --nav-bg:rgba(250,253,250,.96);
+}
+html,body { background:var(--app-bg) !important; color:var(--text-main); }
+body { padding-bottom:calc(6.7rem + env(safe-area-inset-bottom)) !important; }
+body > .max-w-lg, body .max-w-lg { max-width:620px !important; background:var(--app-bg) !important; }
+header {
+  min-height:68px !important; padding: max(.7rem,env(safe-area-inset-top)) 1rem .7rem !important;
+  background:color-mix(in srgb,var(--app-bg) 88%,transparent) !important;
+  border-bottom:1px solid var(--line) !important;
+}
+header .w-9.h-9 { width:42px !important;height:42px !important;border-radius:15px !important; }
+header h1 { font-size:16px !important;letter-spacing:-.045em !important; }
+header #today-btn { min-width:76px; }
+main { padding:1rem 1rem 1.6rem !important; gap:1.25rem !important; }
+#tab-dashboard { gap:1.1rem !important; }
+/* Dashboard hero becomes a compact, clear overview rather than one oversized panel. */
+#tab-dashboard > div:first-child {
+  padding:1.15rem !important; border-radius:25px !important;
+  background:linear-gradient(145deg,#172923 0%,#121b19 66%,#14231d 100%) !important;
+  border:1px solid rgba(66,190,132,.2) !important;
+  box-shadow:0 18px 42px rgba(0,0,0,.16) !important;
+}
+html.light #tab-dashboard > div:first-child {
+  background:linear-gradient(145deg,#ffffff 0%,#f1f8f3 100%) !important;
+  border-color:rgba(33,160,99,.18) !important;
+}
+#tab-dashboard > div:first-child > .absolute { opacity:.45; }
+#tab-dashboard > div:first-child h2 { font-size:1.25rem !important;letter-spacing:-.04em; }
+#tab-dashboard > div:first-child .flex.items-center.gap-5 { gap:1rem !important; }
+#tab-dashboard > div:first-child .w-32.h-32,
+#tab-dashboard > div:first-child .w-32.h-32 svg { width:108px !important;height:108px !important; }
+#tab-dashboard > div:first-child .w-32.h-32 circle { stroke-width:9; }
+#consumed-kcal { font-size:1.8rem !important;letter-spacing:-.055em; }
+#tab-dashboard > div:first-child .flex-1.space-y-2\.5 { gap:.55rem !important; }
+#tab-dashboard > div:first-child .bg-dark-800\/80 {
+  min-height:66px; padding:.8rem .9rem !important; border-radius:17px !important;
+  background:rgba(255,255,255,.045) !important; border:1px solid var(--line) !important;
+}
+#remaining-kcal { font-size:1.55rem !important;letter-spacing:-.04em; }
+#tab-dashboard > div:first-child .grid.grid-cols-2 > div {
+  border-radius:15px !important;padding:.65rem .75rem !important;
+  background:rgba(255,255,255,.035) !important;border:1px solid var(--line) !important;
+}
+#tab-dashboard > div:first-child .grid.grid-cols-3 {
+  gap:.55rem !important;margin-top:1rem !important;padding-top:.9rem !important;
+  border-color:var(--line) !important;
+}
+#tab-dashboard > div:first-child .grid.grid-cols-3 > div {
+  padding:.65rem .6rem !important;border-radius:14px !important;
+  background:rgba(255,255,255,.035) !important;gap:.45rem !important;
+}
+#tab-dashboard > div:first-child .grid.grid-cols-3 .h-2 { height:5px !important; }
+/* Action row: large, predictable touch targets. */
+#tab-dashboard > .grid.grid-cols-2 { gap:.65rem !important; }
+#tab-dashboard > .grid.grid-cols-2 button {
+  min-height:58px !important;padding:.8rem .65rem !important;border-radius:18px !important;
+  font-size:13px !important;letter-spacing:-.02em;box-shadow:none !important;
+}
+#tab-dashboard > .grid.grid-cols-2 button:first-child {
+  background:linear-gradient(115deg,#20c98d,#8cdb37) !important;
+  box-shadow:0 9px 24px rgba(34,194,126,.16) !important;
+}
+#tab-dashboard > .grid.grid-cols-2 button:last-child {
+  background:var(--surface) !important;border:1px solid var(--line) !important;color:var(--text-main) !important;
+}
+#tab-dashboard h3 { font-size:13px !important;letter-spacing:.025em !important; }
+#tab-dashboard .space-y-3 > .flex.items-center.justify-between { padding:.15rem .1rem; }
+#meals-list { gap:.75rem !important; }
+#meals-list:empty { min-height:90px; }
+#meals-list > div {
+  border-radius:21px !important;padding:1rem !important;
+  background:var(--surface) !important;border:1px solid var(--line) !important;
+  box-shadow:0 8px 24px rgba(0,0,0,.09) !important;
+}
+#meals-list > div .bg-dark-800 { background:var(--surface-raised) !important; }
+/* Give each screen its own breathing room and consistent surfaces. */
+#tab-products,#tab-coach,#tab-settings { gap:1rem !important; }
+#tab-products > div,#tab-coach > div,#tab-settings > div {
+  border-radius:22px !important;border-color:var(--line) !important;
+}
+#tab-products input,#tab-coach input,#tab-coach textarea,#tab-settings input,#tab-settings select,
+#add-modal input,#add-modal textarea,#add-modal select {
+  min-height:49px;border-radius:15px !important;background:var(--surface-raised) !important;
+  border:1px solid var(--line) !important;color:var(--text-main) !important;
+}
+.product-row { border-radius:17px !important;background:var(--surface) !important;border-color:var(--line) !important;padding:13px !important; }
+.product-filter { padding:9px 14px !important;border-radius:999px !important;background:var(--surface-raised) !important;border-color:var(--line) !important; }
+/* Native-feeling bottom tab bar with clearer active state. */
+nav > div {
+  max-width:620px !important;min-height:76px !important;
+  padding:.55rem .7rem calc(.55rem + env(safe-area-inset-bottom)) !important;
+  background:var(--nav-bg) !important;border:1px solid var(--line) !important;
+  border-bottom:0 !important;border-radius:23px 23px 0 0 !important;
+  box-shadow:0 -12px 36px rgba(0,0,0,.2) !important;
+  backdrop-filter:blur(25px) saturate(160%) !important;
+}
+nav .nav-btn { min-height:56px !important;gap:5px !important;border-radius:15px !important; }
+nav .nav-btn > i { width:21px !important;height:21px !important; }
+nav .nav-btn span { font-size:10px !important;font-weight:650 !important; }
+nav #nav-photo > div {
+  width:46px !important;height:46px !important;margin-top:-16px !important;
+  border:4px solid var(--app-bg) !important;border-radius:16px !important;
+  background:linear-gradient(145deg,#24cb86,#a4df3d) !important;
+  box-shadow:0 7px 22px rgba(37,199,126,.25) !important;
+}
+/* Modal windows behave like mobile bottom sheets. */
+#add-modal > div,#install-modal > div {
+  border-radius:27px 27px 0 0 !important;border:1px solid var(--line) !important;
+  background:var(--surface) !important;
+  padding-bottom:calc(1.35rem + env(safe-area-inset-bottom)) !important;
+}
+button,a,input,select,textarea { -webkit-tap-highlight-color:transparent; }
+button { touch-action:manipulation; }
+@media (max-width:390px) {
+  main { padding-left:.8rem !important;padding-right:.8rem !important; }
+  #tab-dashboard > div:first-child { padding:1rem !important; }
+  #tab-dashboard > div:first-child .w-32.h-32,
+  #tab-dashboard > div:first-child .w-32.h-32 svg { width:94px !important;height:94px !important; }
+  #tab-dashboard > div:first-child .flex.items-center.gap-5 { gap:.7rem !important; }
+  #tab-dashboard > div:first-child .grid.grid-cols-3 { gap:.35rem !important; }
+  #tab-dashboard > div:first-child .grid.grid-cols-3 > div { padding:.55rem .4rem !important; }
+  #tab-dashboard > .grid.grid-cols-2 button { font-size:12px !important; }
+}
+@media (min-width:640px) {
+  body { padding-bottom:2rem !important; }
+  nav > div { border-radius:23px !important;border-bottom:1px solid var(--line) !important;margin-bottom:.7rem; }
+}
