@@ -1,4 +1,4 @@
-// KBJU Track build v6
+// KBJU Track build v7
 const APP_BUILD_VERSION = "6";
         // ==========================================
         // 1. КОНФИГУРАЦИЯ И СОСТОЯНИЕ ПРИЛОЖЕНИЯ

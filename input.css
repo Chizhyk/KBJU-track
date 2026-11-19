@@ -193,3 +193,208 @@ html.light .text-zinc-950 { color: #102019 !important; }
 html.light .bg-black\/80 { background: rgba(18,24,30,.55) !important; }
 html.light .build-version { color: #7b8b85; }
 
+
+/* =========================================================
+   KBJU TRACK v7 — FULL MOBILE REDESIGN
+   New visual system: editorial dashboard, clear hierarchy,
+   larger touch targets, calmer surfaces and responsive layout.
+   ========================================================= */
+:root {
+  --app-bg: #0b1010;
+  --surface: #121a19;
+  --surface-raised: #192321;
+  --surface-soft: #202c29;
+  --line: rgba(174, 202, 190, .13);
+  --text-main: #f4f8f5;
+  --text-muted: #9aaea5;
+  --accent: #55dfa0;
+  --accent-strong: #24c77d;
+  --nav-bg: rgba(15, 23, 21, .94);
+  --warm: #f1c879;
+}
+html { background: var(--app-bg); }
+body {
+  background: var(--app-bg) !important;
+  color: var(--text-main) !important;
+  font-family: Inter, system-ui, sans-serif;
+  letter-spacing: -.018em;
+  padding-bottom: calc(5.8rem + env(safe-area-inset-bottom)) !important;
+}
+body > .max-w-lg,
+body .max-w-lg {
+  max-width: 620px !important;
+  background: var(--app-bg) !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+header {
+  min-height: 68px;
+  padding: max(.8rem, env(safe-area-inset-top)) 1.1rem .8rem !important;
+  background: rgba(11,16,16,.88) !important;
+  border-color: var(--line) !important;
+  backdrop-filter: blur(24px) saturate(150%);
+}
+header .w-9.h-9 { width: 42px; height: 42px; border-radius: 15px; }
+header h1 { font-size: 15px !important; letter-spacing: -.045em; }
+header button { min-height: 38px; }
+header #today-btn { min-width: 76px; }
+main {
+  width: 100%;
+  padding: 1rem 1rem 1.6rem !important;
+  gap: 1.15rem !important;
+}
+main section { scroll-margin-top: 82px; }
+main section > .bg-dark-900,
+main section .bg-dark-900 {
+  border: 1px solid var(--line) !important;
+  border-radius: 25px !important;
+  background: linear-gradient(145deg, var(--surface), #111817) !important;
+  box-shadow: 0 14px 36px rgba(0,0,0,.16) !important;
+}
+/* Daily overview */
+#tab-dashboard > div:first-child {
+  padding: 1.15rem !important;
+  border-radius: 27px !important;
+  background:
+    radial-gradient(ellipse at 95% 0%, rgba(62,214,143,.13), transparent 42%),
+    linear-gradient(145deg, #18231f 0%, #111917 72%) !important;
+  border-color: rgba(112, 195, 153, .18) !important;
+  box-shadow: 0 18px 45px rgba(0,0,0,.2) !important;
+}
+#tab-dashboard > div:first-child h2 { font-size: 1.28rem !important; letter-spacing: -.045em; }
+#tab-dashboard > div:first-child .flex.items-center.gap-5 { gap: 1rem !important; }
+#tab-dashboard > div:first-child .w-32.h-32 { width: 116px; height: 116px; }
+#tab-dashboard > div:first-child .w-32.h-32 svg { width: 116px; height: 116px; }
+#tab-dashboard > div:first-child #consumed-kcal { font-size: 1.8rem !important; }
+#tab-dashboard > div:first-child .bg-dark-800\/80,
+#tab-dashboard > div:first-child .bg-dark-800\/50 {
+  background: rgba(255,255,255,.045) !important;
+  border-color: rgba(255,255,255,.075) !important;
+  border-radius: 17px !important;
+}
+#tab-dashboard > div:first-child #remaining-kcal { font-size: 1.55rem !important; }
+#tab-dashboard > div:first-child .grid.grid-cols-3 { gap: .65rem !important; }
+#tab-dashboard > div:first-child .grid.grid-cols-3 > div { min-width: 0; }
+#tab-dashboard > div:first-child .grid.grid-cols-3 .h-2 { height: 7px; background: rgba(255,255,255,.09); }
+/* Primary actions */
+#tab-dashboard > .grid.grid-cols-2 { gap: .7rem !important; }
+#tab-dashboard > .grid.grid-cols-2 button {
+  min-height: 58px;
+  border-radius: 18px !important;
+  padding: .8rem .65rem !important;
+  font-size: .88rem;
+  letter-spacing: -.025em;
+  box-shadow: none !important;
+}
+#tab-dashboard > .grid.grid-cols-2 button:first-child {
+  background: linear-gradient(115deg, #20c982, #9bdc37) !important;
+  color: #092016 !important;
+  box-shadow: 0 9px 24px rgba(37,199,126,.18) !important;
+}
+#tab-dashboard > .grid.grid-cols-2 button:last-child {
+  background: var(--surface-raised) !important;
+  border: 1px solid var(--line) !important;
+}
+/* Meals */
+#tab-dashboard > div.space-y-3 > .flex.items-center.justify-between { padding: .15rem .15rem 0; }
+#tab-dashboard > div.space-y-3 h3 { font-size: .78rem !important; letter-spacing: .08em; }
+#meals-list { gap: .75rem !important; }
+#meals-list > div {
+  border-radius: 22px !important;
+  padding: 1rem !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: 0 10px 28px rgba(0,0,0,.12) !important;
+}
+#meals-list > div img,
+#meals-list > div > .w-14 { border-radius: 16px !important; }
+#meals-list > div .bg-dark-800 { background: var(--surface-raised) !important; border-color: transparent !important; border-radius: 15px !important; }
+/* Other screens */
+#tab-products > .bg-dark-900,
+#tab-coach > .bg-dark-900,
+#tab-settings > .bg-dark-900 { padding: 1.1rem !important; }
+#tab-products input, #tab-coach input, #tab-coach textarea, #tab-settings input, #tab-settings select {
+  min-height: 48px;
+  background: var(--surface-raised) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 15px !important;
+  padding: .8rem .9rem !important;
+}
+.product-filter { padding: 10px 15px !important; border-radius: 999px !important; background: var(--surface-raised) !important; border-color: var(--line) !important; font-size: 12px !important; }
+.product-row { border-radius: 17px !important; padding: 12px !important; background: var(--surface) !important; border-color: var(--line) !important; }
+/* Navigation */
+nav > div {
+  max-width: 620px !important;
+  min-height: 72px;
+  padding: .55rem .7rem calc(.55rem + env(safe-area-inset-bottom)) !important;
+  background: var(--nav-bg) !important;
+  border: 1px solid var(--line) !important;
+  border-bottom: 0 !important;
+  border-radius: 23px 23px 0 0 !important;
+  box-shadow: 0 -12px 36px rgba(0,0,0,.25) !important;
+  backdrop-filter: blur(26px) saturate(160%);
+}
+nav .nav-btn { min-height: 54px; gap: 5px !important; border-radius: 15px; }
+nav .nav-btn > i { width: 21px; height: 21px; }
+nav .nav-btn span { font-size: 10px !important; font-weight: 650 !important; }
+nav #nav-photo { transform: none; }
+nav #nav-photo > div {
+  width: 43px !important; height: 43px !important;
+  margin-top: -17px !important;
+  border: 4px solid var(--app-bg) !important;
+  border-radius: 16px !important;
+  background: linear-gradient(145deg, #24cb86, #a4df3d) !important;
+  box-shadow: 0 7px 22px rgba(37,199,126,.25) !important;
+}
+nav #nav-photo span { color: var(--accent) !important; }
+/* Modal sheets and touch ergonomics */
+#add-modal > div, #install-modal > div { border-radius: 26px 26px 0 0 !important; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button { touch-action: manipulation; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.build-version { color: #8ca69a; font-size: 9px; letter-spacing: .05em; }
+/* Light appearance follows device preference */
+html.light {
+  --app-bg: #f2f5f2;
+  --surface: #ffffff;
+  --surface-raised: #f2f5f3;
+  --surface-soft: #e9efeb;
+  --line: rgba(28,55,42,.10);
+  --text-main: #17251e;
+  --text-muted: #718078;
+  --nav-bg: rgba(255,255,255,.94);
+  background: var(--app-bg);
+}
+html.light body, html.light body > .max-w-lg, html.light body .max-w-lg { background: var(--app-bg) !important; color: var(--text-main) !important; }
+html.light header { background: rgba(247,250,247,.9) !important; }
+html.light #tab-dashboard > div:first-child {
+  background: radial-gradient(ellipse at 95% 0%, rgba(53,190,125,.12), transparent 42%), linear-gradient(145deg,#fff,#f4f8f5) !important;
+  border-color: rgba(28,120,77,.13) !important;
+}
+html.light main section > .bg-dark-900, html.light main section .bg-dark-900, html.light #meals-list > div { background: var(--surface) !important; }
+html.light #tab-dashboard > div:first-child .bg-dark-800\/80,
+html.light #tab-dashboard > div:first-child .bg-dark-800\/50 { background: rgba(24,55,39,.045) !important; border-color: var(--line) !important; }
+html.light .text-white, html.light main .text-white, html.light header .text-white { color: #17251e !important; }
+html.light .text-zinc-200 { color: #34483d !important; }
+html.light .text-zinc-300 { color: #52645a !important; }
+html.light .text-zinc-400 { color: #718078 !important; }
+html.light .text-zinc-500 { color: #87958d !important; }
+html.light .border-zinc-700, html.light .border-zinc-700\/60, html.light .border-zinc-800, html.light .border-zinc-800\/70, html.light .border-zinc-800\/80, html.light .border-zinc-800\/90 { border-color: var(--line) !important; }
+html.light nav > div { background: var(--nav-bg) !important; border-color: var(--line) !important; }
+html.light #tab-dashboard > div:first-child .bg-dark-800 { background: #edf2ee !important; }
+html.light #meals-list > div .bg-dark-800 { background: #f0f4f1 !important; }
+html.light .product-filter { background: #fff !important; color: #52645a !important; }
+html.light .product-filter.active { background: rgba(36,199,125,.12) !important; color: #168452 !important; }
+@media (max-width: 390px) {
+  main { padding-left: .8rem !important; padding-right: .8rem !important; }
+  #tab-dashboard > div:first-child { padding: 1rem !important; }
+  #tab-dashboard > div:first-child .w-32.h-32,
+  #tab-dashboard > div:first-child .w-32.h-32 svg { width: 102px; height: 102px; }
+  #tab-dashboard > div:first-child .flex.items-center.gap-5 { gap: .75rem !important; }
+  #tab-dashboard > div:first-child #remaining-kcal { font-size: 1.35rem !important; }
+  #tab-dashboard > .grid.grid-cols-2 button { font-size: .8rem; }
+}
+@media (min-width: 640px) {
+  body { padding-bottom: 2rem !important; }
+  nav > div { border-radius: 23px !important; border-bottom: 1px solid var(--line) !important; margin-bottom: .75rem; }
+}
